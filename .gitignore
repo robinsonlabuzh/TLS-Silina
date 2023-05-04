@@ -7,9 +7,10 @@
 ../.DS_Store
 ../**/.DS_Store
 
-docs/*
-docs/*
 outs/*rds
+docs/*txt
+docs/*json
+docs/*html
 code/*cache
 code/*files
 code/.quarto
