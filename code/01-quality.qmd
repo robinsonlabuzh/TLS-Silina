@@ -68,11 +68,22 @@ table(cs <- colMeans(loq) >= 0.03)
 gs <- by(t(loq), sce$TumorType, \(.)
     colnames(.)[colMeans(.) >= 0.1])
 sapply(gs, length)
-length(gs <- unique(unlist(gs)))
+gs <- unique(unlist(gs))
 dim(sce <- sce[gs, cs])
-# exclude LN tissue subtypes
-is_ln <- grep("LN", sce$TissueSubtype, ignore.case = TRUE)
-dim(sce <- sce[, -is_ln])
+# exclude LN & Ep tissue subtypes
+rmv <- grepl("^LNmet", sce$TissueType, ignore.case = TRUE) |
+    grepl("^TLSEp", sce$TissueSubtype, ignore.case = TRUE)
+dim(sce <- sce[, !rmv])
+# add broader subtypes
+sce$TissueSub <- sce$TissueSubtype
+sce$TissueSub[grep("^LN", sce$TissueType)] <- "LN"
+sce$TissueSub[grep("^SFL_TLS", sce$TissueSubtype)] <- "SFL_TLS"
+# reorder factors of interest
+sce$TissueType <- factor(sce$TissueType, c(
+    "TLS", "LN", "Alv", "Kid", "Tum"))
+sce$TissueSub <- factor(sce$TissueSub, c(
+    "E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS", 
+    "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
 cd <- data.frame(colData(sce))
 ```
 
@@ -154,13 +165,16 @@ cd <- data.frame(cd, dr)
 #| code-fold: true
 #| fig-width: 7
 #| fig-height: 3
-var <- c(
-  "AOINucleiCount", "AOISurfaceArea", "LOQ", 
-  "TumorType", "TissueType", "TissueSubtype",
-  "SlideName", "PatientID", "PatientCategory") 
+var <- c("AOINucleiCount", "AOISurfaceArea", "LOQ", "TumorType", 
+    "TissueSub", "SlideName", "PatientID", "PatientCategory") 
 (pve <- plotExplanatoryVariables(sce, variables = var))
 ```
 
+### PCA
+
+::: {.panel-tabset}
+
+#### discrete
 
 ```{r}
 #| dependson: reduction
@@ -181,6 +195,8 @@ ggplot(cd, aes(PC1, PC2, col = TissueType)) &
     legend.key.size = unit(0.5, "lines")) 
 ```
 
+#### continuous
+
 ```{r}
 #| dependson: reduction
 #| label: plot-pca-condt
@@ -198,6 +214,35 @@ ggplot(cd, aes(PC1, PC2, col = AOINucleiCount)) &
     legend.justification = "top",
     legend.key.width = unit(2, "lines"),
     legend.key.height = unit(0.5, "lines"))
+```
+
+:::
+
+### AOI counts
+
+```{r}
+#| dependson: filtering
+#| label: plot-aoi
+#| code-fold: true
+#| fig-width: 7
+#| fig-height: 3
+for (. in c("TissueType", "TissueSub")) {
+    ns <- table(PatientID = sce$PatientID, sce[[.]])
+    ns <- as.data.frame(ns); names(ns)[2] <- .
+    ns$TumorType <- sce$TumorType[match(ns$PatientID, sce$PatientID)]
+    gg <- ggplot(ns, 
+        aes(PatientID, Freq, fill = .data[[.]])) +
+        geom_bar(stat = "identity", position = "stack") +
+        scale_fill_brewer(palette = "Set1") +
+        facet_grid(~TumorType, scales = "free_x") +
+        labs(x = "Patient ID", y = "# AOIs") + 
+        theme_bw() + theme(
+            aspect.ratio = 1,
+            panel.grid = element_blank(),
+            legend.key.size = unit(0.5, "lines"),
+            axis.text.x = element_text(angle = 30, hjust = 1))
+    print(gg)
+}
 ```
 
 ## Appendix
