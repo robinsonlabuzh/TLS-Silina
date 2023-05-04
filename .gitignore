@@ -6,6 +6,7 @@
 
 .DS_Store
 **/.DS_Store
+docs/.gitkeep
 
 outs/*rds
 docs/*xml
