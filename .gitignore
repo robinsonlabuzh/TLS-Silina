@@ -5,6 +5,7 @@
 .Rproj.user
 
 outs/*rds
+data/**/csv
 code/*cache
 code/*files
 code/.quarto
