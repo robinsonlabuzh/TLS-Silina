@@ -1,0 +1,34 @@
+execute: 
+  cache: true
+  message: false
+  warning: false
+
+project:
+  type: website
+  execute-dir: file
+  output-dir: ../docs
+  render:
+    - 00-home.qmd
+    - 01-quality.qmd
+
+format:
+  html:
+    theme: lux
+    toc: true
+    toc-depth: 2
+    code-fold: show
+    standalone: true
+    embed-resources: true
+    
+website:
+  title: "TLS"
+  navbar:
+    search: false
+    left:
+      - href: 00-home.qmd
+      - href: 01-quality.qmd
+
+
+
+
+
