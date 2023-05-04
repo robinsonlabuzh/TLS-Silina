@@ -7,8 +7,9 @@
 ../.DS_Store
 ../**/.DS_Store
 
+docs/*
+docs/*
 outs/*rds
-docs/*html
 code/*cache
 code/*files
 code/.quarto
