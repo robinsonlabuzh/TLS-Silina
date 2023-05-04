@@ -57,17 +57,22 @@ sce$neg <- colSums(counts(sce[ is_np, ]))
 sce$pos <- colSums(counts(sce[!is_np, ]))
 # drop negative probes & outliers
 sce <- sce[!is_np,
+    sce$neg < 500 &
     sce$RawReads >= 100 &
     sce$AOINucleiCount >= 5]
 # test whether or not features lie above sample-specific LOQ
 loq <- sweep(assay(sce), 2, sce$LOQ, `>`)
-# keep samples with at least 5% of genes > LOQ
-table(cs <- colMeans(loq) >= 0.05)
- # keep genes > LOQ in at least 10% of samples
+# keep samples with at least 3% of genes > LOQ
+table(cs <- colMeans(loq) >= 0.03)
+ # keep genes > LOQ in at least 10% of samples (by tumor type)
 gs <- by(t(loq), sce$TumorType, \(.)
     colnames(.)[colMeans(.) >= 0.1])
-gs <- unique(unlist(gs))
+sapply(gs, length)
+length(gs <- unique(unlist(gs)))
 dim(sce <- sce[gs, cs])
+# exclude LN tissue subtypes
+is_ln <- grep("LN", sce$TissueSubtype, ignore.case = TRUE)
+dim(sce <- sce[, -is_ln])
 cd <- data.frame(colData(sce))
 ```
 
@@ -94,11 +99,9 @@ ggplot(cd, aes(AOISurfaceArea, AOINucleiCount, col = SlideName)) +
 #| code-fold: true
 #| warning: false
 #| fig-width: 8
-#| fig-height: 6
+#| fig-height: 3
 ggplot(cd, aes(RawReads, col = SlideName)) +
-ggplot(cd, aes(RawReads, col = PatientID)) +
-ggplot(cd, aes(RawReads, col = TumorType)) +
-ggplot(cd, aes(RawReads, col = TissueType)) &
+ggplot(cd, aes(RawReads, col = PatientID)) &
   geom_density(key_glyph = "point") & 
   guides(color = guide_legend(
       override.aes = list(size = 3, alpha = 1))) &
