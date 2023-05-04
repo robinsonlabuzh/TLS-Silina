@@ -4,7 +4,11 @@
 .Ruserdata
 .Rproj.user
 
+../.DS_Store
+../**/.DS_Store
+
 outs/*rds
+docs/*html
 data/**/csv
 code/*cache
 code/*files
