@@ -39,7 +39,7 @@ cd <- read.csv(
 names(cd)[ncol(cd)] <- "LOQ"
 names(cd) <- gsub("_ty", "_Ty", names(cd))
 names(cd) <- gsub("_", "", names(cd))
-cd$TissueSubtype <- gsub("TLSep", "TLSEp", cd$TissueSubtype)
+cd$TissueSubtype <- gsub("TLSEp", "TLSep", cd$TissueSubtype)
 # construct SCE
 (sce <- SingleCellExperiment(
   list(counts = as.matrix(y)),
@@ -71,10 +71,8 @@ sapply(gs, length)
 gs <- unique(unlist(gs))
 dim(sce <- sce[gs, cs])
 # exclude LN & Ep tissue subtypes
-rmv <- grepl("^LNmet", sce$TissueType, ignore.case = TRUE) |
-    grepl("^TLSEp", sce$TissueSubtype, ignore.case = TRUE)
-dim(sce <- sce[, !rmv])
-# add broader subtypes
+dim(sce <- sce[, !grepl("^(LNmet|TLSep)", sce$TissueType, ignore.case = TRUE)])
+# add broader subtype labels
 sce$TissueSub <- sce$TissueSubtype
 sce$TissueSub[grep("^LN", sce$TissueType)] <- "LN"
 sce$TissueSub[grep("^SFL_TLS", sce$TissueSubtype)] <- "SFL_TLS"
@@ -85,6 +83,14 @@ sce$TissueSub <- factor(sce$TissueSub, c(
     "E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS", 
     "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
 cd <- data.frame(colData(sce))
+```
+
+```{r}
+#| echo: false
+# check for re-factoring typos
+stopifnot(
+    !any(is.na(sce$TissueType)),
+    !any(is.na(sce$TissueSub)))
 ```
 
 ```{r}
