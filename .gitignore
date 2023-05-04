@@ -9,7 +9,7 @@
 
 outs/*rds
 docs/*html
-#data/**/csv
+data/**/csv
 code/*cache
 code/*files
 code/.quarto
