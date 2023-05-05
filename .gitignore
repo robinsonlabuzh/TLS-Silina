@@ -4,12 +4,10 @@
 .Ruserdata
 .Rproj.user
 
+arch/
 outs/
 data/
 docs/
 code/*cache
 code/*files
 code/.quarto
-
-code/*Rmd
-code/vis-*
