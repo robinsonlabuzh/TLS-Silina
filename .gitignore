@@ -10,5 +10,5 @@ docs/
 code/*cache
 code/*files
 code/.quarto
-data/GeoMx/
-data/Visium/
+data/GeoMx/*csv
+data/Visium/**/
