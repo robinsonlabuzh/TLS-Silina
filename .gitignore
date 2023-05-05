@@ -1,0 +1,14 @@
+.RData
+.DS_Store
+.Rhistory
+.Ruserdata
+.Rproj.user
+
+arch/
+outs/*rds
+docs/*html
+code/*cache
+code/*files
+code/.quarto
+data/GeoMx/*csv
+data/Visium/**/
