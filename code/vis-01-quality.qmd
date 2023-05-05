@@ -1,0 +1,213 @@
+# Quality
+
+## Preamble
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+library(dplyr)
+library(tidyr)
+library(scran)
+library(scater)
+library(ggplot2)
+library(patchwork)
+library(SpatialExperiment)
+```
+
+```{r}
+#| label: load-utils
+#| cache: false
+#| echo: false
+source("utils.R")
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+dir <- file.path("..", "data", "Visium")
+ids <- list.dirs(dir, recursive = FALSE)
+ids <- setNames(ids, basename(ids))
+ids <- ids[grep("^B[0-9]+", names(ids))]
+spe <- read10xVisium(ids, type = "HDF5", images = "lowres")
+spe$barcode <- colnames(spe); colnames(spe) <- 
+    paste(spe$sample_id, spe$barcode, sep = ".")
+```
+
+```{r}
+#| dependson: load-data
+#| label: load-md
+md <- read.csv(file.path(dir, "md.csv"))
+md <- md[!is.na(md$Used.for.10x), ]
+md$sample_id <- paste(md$B.number, md$block.ID, sep = "-")
+md$sample_id <- gsub("-", "_", md$sample_id)
+idx <- match(spe$sample_id, md$sample_id)
+table(spe$TumorType <- factor(md$Tumor.type[idx]))
+```
+
+```{r}
+#| dependson: load-md
+#| echo: false
+stopifnot(!any(is.na(spe$TumorType)))
+```
+
+```{r}
+#| dependson: load-data
+#| label: load-anno
+fnm <- setNames(list.files(ids, ext, full.names = TRUE), names(ids))
+lab <- mapply(
+    SIMPLIFY = FALSE,
+    df = csv, id = names(csv), 
+    \(df, id) {
+        #id <- names(csv)[5]; df <- csv[[id]]
+        df <- read.csv(df, col.names = c("barcode", "label"))
+        #table(spe$barcode[spe$sample_id == id] %in% df$barcode)
+        # df <- df[grepl("-1$", df$barcode), ]
+        # rownames(df) <- paste(id, df$barcode, sep = ".")
+        return(df)
+    })# |> do.call(what = rbind)
+
+# looks like spots labelled 'EXCL' or 'LN' have already been removed
+any(rownames(lab)[lab$label %in% c("EXCL", "LN")] %in% colnames(spe))
+i <- match(colnames(spe), rownames(lab), nomatch = 0)
+j <- match(rownames(lab), colnames(spe), nomatch = 0)
+spe$label <- NA; spe$label[j] <- lab$label[i]
+table(spe$label, exclude = NULL)
+```
+
+### Wrangling
+
+```{r}
+#| dependson: load-md, load-anno
+#| label: prep-data
+rd <- rowData(spe)
+rd$ensembl <- rownames(spe)
+rownames(spe) <- make.names(rd$symbol)
+spatialCoordsNames(spe) <- c("x", "y")
+spe$sample_id <- factor(spe$sample_id)
+```
+
+```{r}
+#| dependson: prep-data
+#| label: spe
+spe
+```
+
+## Exploratory
+
+```{r}
+#| dependson: spe
+#| label: calc-qc
+# get gene-(sample-) & spot-level QC summaries 
+sub <- split(seq(ncol(spe)), spe$sample_id)
+spe <- addPerFeatureQC(spe, subsets = sub)
+spe <- addPerCellQC(spe)
+# get tables of spot & gene metadata
+rd <- .df(spe, margin = 1)
+cd <- .df(spe, margin = 2)
+```
+
+### Genes
+
+```{r}
+#| dependson: calc-qc
+#| label: plot-rd
+#| fig-width: 8
+#| fig-height: 3
+dr <- rd %>% 
+    select(matches("subsets.*detected")) %>% 
+    pivot_longer(everything()) %>% 
+    mutate(sample_id = gsub("subsets_(.*)_detected", "\\1", name))
+ggplot(dr, aes(value, col = sample_id)) &
+    labs(x = "% of cells with non-zero count") &
+    geom_density(key_glyph = "point") & scale_x_sqrt() & 
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) &
+    theme_bw() & theme(aspect.ratio = 2/3, 
+        panel.grid.minor = element_blank(), 
+        legend.key.size = unit(0.5, "lines")) 
+```
+
+### Spots
+
+```{r}
+#| dependson: calc-qc
+#| label: plot-cd
+#| fig-width: 8
+#| fig-height: 3
+ggplot(cd, aes(total, col = sample_id)) +
+ggplot(cd, aes(detected, col = sample_id)) +
+    plot_layout(guides = "collect") &
+    geom_density(key_glyph = "point") & scale_x_log10() & 
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) &
+    theme_bw() & theme(aspect.ratio = 1, legend.key.size = unit(0.5, "lines")) 
+```
+
+```{r}
+#| label: plot-xy-det
+#| dependson: calc-qc
+#| fig-width: 12
+#| fig-height: 7
+cd %>% 
+  group_by(sample_id) %>% 
+  mutate(total = .scale01(log10(total))) %>% 
+  ggplot(aes(x, y, col = total)) +
+  geom_point(shape = 16, size = 1) +
+  facet_wrap(~ sample_id, nrow = 2) +
+  scale_color_viridis_c() +
+  coord_equal() + theme_void() +
+  theme(legend.position = "none")
+```
+
+```{r}
+#| label: plot-xy-lab
+#| dependson: spe
+#| fig-width: 12
+#| fig-height: 7
+cd %>% 
+  ggplot(aes(x, y, col = label)) +
+  geom_point(shape = 16, size = 1) +
+  facet_wrap(~ sample_id, nrow = 2) +
+  coord_equal() + theme_void() +
+  theme(legend.position = "bottom") +
+  guides(col = guide_legend(NULL, override.aes = list(size = 3)))
+```
+
+## Filtering
+
+```{r}
+#| label: filtering
+#| dependson: calc-qc
+sub <- spe[, !isOutlier(cd$total, batch = cd$sample_id, log = TRUE, type = "lower")]
+idx <- split(seq(ncol(sub)), sub$TumorType == "ccRCC")
+# for each tumor type, get genes detected
+# in at least 1% of cells in all samples
+#y <- as.matrix(counts(sub) > 0)
+gs <- lapply(idx, \(.) {
+    ids <- droplevels(spe$sample_id[.])
+    fil <- by(t(y[, .]), ids, \(.) colnames(.)[colMeans(.) >= 0.01])
+    #sapply(fil, length)
+    #length(Reduce(intersect, fil))
+    Reduce(intersect, fil)
+})
+sapply(gs, length)
+```
+
+## Appendix
+
+```{r}
+#| label: save-data
+saveRDS(spe, file.path("..", "outs", "01-spe.rds"))
+```
+
+::: {.callout-note icon=false, collapse=true}
+
+### Session info
+
+```{r}
+#| label: session-info
+#| code-fold: false
+sessionInfo()
+```
+
+:::
