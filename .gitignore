@@ -5,8 +5,8 @@
 .Rproj.user
 
 arch/
-docs/
 outs/*rds
+docs/*html
 code/*cache
 code/*files
 code/.quarto
