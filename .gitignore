@@ -6,8 +6,9 @@
 
 arch/
 outs/
-data/
 docs/
 code/*cache
 code/*files
 code/.quarto
+data/GeoMx/
+data/Visium/
