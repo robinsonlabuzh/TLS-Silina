@@ -10,7 +10,7 @@ project:
   render:
     - index.qmd
     - geo-01-quality.qmd
-    - geo-02-differential.qmd
+    #- geo-02-differential.qmd
 
 format:
   html:
@@ -29,7 +29,7 @@ website:
       - text: GeoMx
         menu:
           - file: geo-01-quality.qmd
-          - file: geo-02-differential.qmd
+          #- file: geo-02-differential.qmd
       # - id: visium
       #   title: Visium
       #   contents:

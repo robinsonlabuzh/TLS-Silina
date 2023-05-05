@@ -4,11 +4,8 @@
 .Ruserdata
 .Rproj.user
 
-.DS_Store
-**/.DS_Store
-*/**/.DS_Store
-
-outs/*rds
+outs/
+data/
 docs/*xml
 docs/*txt
 docs/*json
@@ -16,5 +13,3 @@ docs/*html
 code/*cache
 code/*files
 code/.quarto
-data/GeoMx/**
-data/Visium/**
