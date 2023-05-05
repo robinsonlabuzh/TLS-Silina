@@ -15,4 +15,5 @@ docs/*html
 code/*cache
 code/*files
 code/.quarto
-data/**/*csv
+data/GeoMx/**
+data/Visium/**

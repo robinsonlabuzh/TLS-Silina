@@ -8,25 +8,42 @@ project:
   execute-dir: file
   output-dir: ../docs
   render:
-    - 00-home.qmd
-    - 01-quality.qmd
+    - home.qmd
+    - geo-01-quality.qmd
+    - geo-02-differential.qmd
 
 format:
   html:
     theme: lux
     toc: true
-    toc-depth: 2
+    toc-depth: 3
     code-fold: show
     standalone: true
     embed-resources: true
     
 website:
-  title: "TLS"
+  title: TLS
   navbar:
     search: false
     left:
-      - href: 00-home.qmd
-      - href: 01-quality.qmd
+      - file: home.qmd
+      - sidebar:geomx
+      - sidebar:visium
+      - sidebar:mapping
+    sidebar:
+      - id: geomx
+        title: GeoMx
+        contents:
+          - file: geo-01-quality.qmd
+          - file: geo-02-differential.qmd
+      # - id: visium
+      #   title: Visium
+      #   contents:
+      #     - vis-01-quality.qmd
+      # - id: mapping
+      #   title: Mapping
+      #   contents:
+      #     - file: map-01-exploratory.qmd
 
 
 

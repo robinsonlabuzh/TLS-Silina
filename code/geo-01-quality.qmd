@@ -60,28 +60,31 @@ sce <- sce[!is_np,
     sce$neg < 500 &
     sce$RawReads >= 100 &
     sce$AOINucleiCount >= 5]
+# drop LNmet (single sample)
+sce <- sce[, -grep("LNmet", sce$TissueType)]
 # test whether or not features lie above sample-specific LOQ
 loq <- sweep(assay(sce), 2, sce$LOQ, `>`)
-# keep samples with at least 3% of genes > LOQ
-table(cs <- colMeans(loq) >= 0.03)
+# keep samples with at least 5% of genes > LOQ
+table(cs <- colMeans(loq) >= 0.05)
  # keep genes > LOQ in at least 10% of samples (by tumor type)
 gs <- by(t(loq), sce$TumorType, \(.)
     colnames(.)[colMeans(.) >= 0.1])
 sapply(gs, length)
 gs <- unique(unlist(gs))
 dim(sce <- sce[gs, cs])
-# exclude LN & Ep tissue subtypes
-dim(sce <- sce[, !grepl("^(LNmet|TLSep)", sce$TissueType, ignore.case = TRUE)])
+```
+
+```{r}
 # add broader subtype labels
 sce$TissueSub <- sce$TissueSubtype
 sce$TissueSub[grep("^LN", sce$TissueType)] <- "LN"
 sce$TissueSub[grep("^SFL_TLS", sce$TissueSubtype)] <- "SFL_TLS"
 # reorder factors of interest
 sce$TissueType <- factor(sce$TissueType, c(
-    "TLS", "LN", "Alv", "Kid", "Tum"))
+    "TLS", "TLSep", "LN", "Alv", "Kid", "Tum"))
 sce$TissueSub <- factor(sce$TissueSub, c(
     "E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS", 
-    "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
+    "TLSep", "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
 cd <- data.frame(colData(sce))
 ```
 
@@ -226,30 +229,37 @@ ggplot(cd, aes(PC1, PC2, col = AOINucleiCount)) &
 
 ### AOI counts
 
+::: {.panel-tabset}
+
 ```{r}
 #| dependson: filtering
 #| label: plot-aoi
 #| code-fold: true
 #| fig-width: 7
 #| fig-height: 3
+#| results: asis
 for (. in c("TissueType", "TissueSub")) {
+    cat("####", ., "\n\n")
     ns <- table(PatientID = sce$PatientID, sce[[.]])
     ns <- as.data.frame(ns); names(ns)[2] <- .
     ns$TumorType <- sce$TumorType[match(ns$PatientID, sce$PatientID)]
+    pal <- hcl.colors(nlevels(sce[[.]]), "Spectral")
     gg <- ggplot(ns, 
         aes(PatientID, Freq, fill = .data[[.]])) +
         geom_bar(stat = "identity", position = "stack") +
-        scale_fill_brewer(palette = "Set1") +
         facet_grid(~TumorType, scales = "free_x") +
         labs(x = "Patient ID", y = "# AOIs") + 
+        scale_fill_manual(values = pal) +
         theme_bw() + theme(
             aspect.ratio = 1,
             panel.grid = element_blank(),
             legend.key.size = unit(0.5, "lines"),
             axis.text.x = element_text(angle = 30, hjust = 1))
-    print(gg)
+    print(gg); cat("\n\n")
 }
 ```
+
+:::
 
 ## Appendix
 
