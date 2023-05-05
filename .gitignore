@@ -1,0 +1,15 @@
+.RData
+.DS_Store
+.Rhistory
+.Ruserdata
+.Rproj.user
+
+outs/
+data/
+docs/
+code/*cache
+code/*files
+code/.quarto
+
+code/*Rmd
+code/vis-*
