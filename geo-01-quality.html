@@ -4147,7 +4147,7 @@ altExpNames(0):</code></pre>
 </section>
 <section id="filtering" class="level2">
 <h2 class="anchored" data-anchor-id="filtering">Filtering</h2>
-<div class="cell" data-hash="geo-01-quality_cache/html/filtering_a7ad92480995523319484878e86472c3">
+<div class="cell" data-hash="geo-01-quality_cache/html/filtering_a20d10cc49278e85a14cc155024035ce">
 <details open>
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># total positive/negative probe counts</span></span>
@@ -4161,10 +4161,11 @@ altExpNames(0):</code></pre>
 <span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    sce<span class="sc">$</span>AOINucleiCount <span class="sc">&gt;=</span> <span class="dv">5</span>]</span>
 <span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="co"># drop LNmet (single sample)</span></span>
 <span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>sce <span class="ot">&lt;-</span> sce[, <span class="sc">-</span><span class="fu">grep</span>(<span class="st">&quot;LNmet&quot;</span>, sce<span class="sc">$</span>TissueType)]</span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="co"># test whether or not features lie above sample-specific LOQ</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>loq <span class="ot">&lt;-</span> <span class="fu">sweep</span>(<span class="fu">assay</span>(sce), <span class="dv">2</span>, sce<span class="sc">$</span>LOQ, <span class="st">`</span><span class="at">&gt;</span><span class="st">`</span>)</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="co"># keep samples with at least 5% of genes &gt; LOQ</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(cs <span class="ot">&lt;-</span> <span class="fu">colMeans</span>(loq) <span class="sc">&gt;=</span> <span class="fl">0.05</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="co"># test whether or not features</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="co"># lie above sample-specific LOQ</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>loq <span class="ot">&lt;-</span> <span class="fu">sweep</span>(<span class="fu">assay</span>(sce), <span class="dv">2</span>, sce<span class="sc">$</span>LOQ, <span class="st">`</span><span class="at">&gt;</span><span class="st">`</span>)</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="co"># keep samples with at least 5% of genes &gt; LOQ</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(cs <span class="ot">&lt;-</span> <span class="fu">colMeans</span>(loq) <span class="sc">&gt;=</span> <span class="fl">0.05</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -4173,22 +4174,24 @@ FALSE  TRUE
 </div>
 <details open>
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a> <span class="co"># keep genes &gt; LOQ in at least 10% of samples (by tumor type)</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>gs <span class="ot">&lt;-</span> <span class="fu">by</span>(<span class="fu">t</span>(loq), sce<span class="sc">$</span>TumorType, \(.)</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">colnames</span>(.)[<span class="fu">colMeans</span>(.) <span class="sc">&gt;=</span> <span class="fl">0.1</span>])</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="fu">sapply</span>(gs, length)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>sce <span class="ot">&lt;-</span> sce[, cs]; loq <span class="ot">&lt;-</span> loq[, cs]</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a> <span class="co"># keep genes &gt; LOQ in at least</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="co"># 10% of samples (by tumor type)</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>gs <span class="ot">&lt;-</span> <span class="fu">by</span>(<span class="fu">t</span>(loq), sce<span class="sc">$</span>TumorType, \(.)</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">colnames</span>(.)[<span class="fu">colMeans</span>(.) <span class="sc">&gt;=</span> <span class="fl">0.1</span>])</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sapply</span>(gs, length)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>LSCC  RCC 
-2687 2952 </code></pre>
+3263 3213 </code></pre>
 </div>
 <details open>
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>gs <span class="ot">&lt;-</span> <span class="fu">unique</span>(<span class="fu">unlist</span>(gs))</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(sce <span class="ot">&lt;-</span> sce[gs, cs])</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(sce <span class="ot">&lt;-</span> sce[gs, ])</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
-<pre><code>[1] 3194  249</code></pre>
+<pre><code>[1] 3696  249</code></pre>
 </div>
 </div>
 <div class="cell" data-hash="geo-01-quality_cache/html/unnamed-chunk-5_9b1db39112d064cc7d81f1da8f161d5c">
