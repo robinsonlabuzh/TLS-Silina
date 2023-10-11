@@ -1,0 +1,148 @@
+# TLS
+
+## Preamble
+
+### Dependencies
+
+```{r load-libs}
+library(scran)
+library(scater)
+library(scuttle)
+library(ggplot2)
+library(pheatmap)
+library(patchwork)
+```
+
+### Loading
+
+```{r load-data}
+spe <- readRDS("../outs/01-spe.rds")
+```
+
+## Setup
+
+### Wrangling
+
+```{r wrangling}
+# add tissue types
+spe$TissueType <- ifelse(
+    spe$TumorType == "ccRCC", 
+    yes = "kid", no = "lun")
+# exclude unassigned & 
+# spots tagged for exclusion
+nan <- is.na(spe$anno1) | is.na(spe$anno2)
+rmv <- grepl("EXCL", spe$anno1)
+sub <- spe[, !(nan | rmv)]
+# subset regions of interest
+ids <- c("INFL", "TLS", "LN")
+sub <- sub[, sub$anno1 %in% ids]
+sub$anno1 <- droplevels(sub$anno1)
+# subset samples of interest
+ids <- c("B04_17776", "B06_24137", "B06_24784")
+sub <- sub[, sub$sample_id %in% ids]
+sub$sample_id <- droplevels(sub$sample_id)
+# simplify annotations
+sub$anno3 <- as.character(sub$anno2)
+sub$anno3[grep(".*ETLS", sub$anno3)] <- "E_TLS"
+sub$anno3[grep(".*MTLS", sub$anno3)] <- "M_TLS"
+sub$anno3 <- factor(sub$anno3, exclude = NULL)
+table(sub$sample_id, sub$anno3)
+table(sub$anno1, sub$anno3)
+```
+
+### Filtering
+
+```{r filtering}
+#| dependson: wrangling
+# keep features detected in at least 20 spots in any sample
+# and spots with at least 200 detected features overall
+idx <- split(seq(ncol(sub)), sub$sample_id)
+gs <- sapply(idx, \(.) {
+    y <- counts(sub[, .]) > 0
+    rowSums(y) >= 20
+})
+fil <- sub[rowAnys(gs), ]
+fil <- fil[, colSums(counts(fil) > 0) >= 200]
+cbind(spe = dim(spe), sub = dim(sub), fil = dim(fil))
+```
+
+## Analysis
+
+```{r}
+# split by sample
+idx <- split(seq(ncol(sub)), sub$sample_id)
+lys <- lapply(idx, \(.) sub[, .])
+# feature selection & PCA
+lys <- lapply(lys, \(.) {
+  tbl <- modelGeneVar(.) 
+  hvg <- rowData(.)$hvg <- tbl$bio > 0
+  runPCA(., subset_row = hvg) 
+})
+# within TLS only
+tls <- lapply(lys, \(.) {
+  . <- .[, .$anno1 == "TLS"]
+  .$anno3 <- droplevels(.$anno3)
+  tbl <- modelGeneVar(.) 
+  hvg <- rowData(.)$hvg <- tbl$bio > 0
+  runPCA(., subset_row = hvg) 
+})
+```
+
+```{r fig.width=10, fig.height=3}
+thm <- list(
+  coord_equal(),
+  theme(legend.key.size = unit(0.5, "lines")),
+  guides(col = guide_legend(override.aes = list(alpha = 1, size = 2))))
+pal <- hcl.colors(nlevels(sub$anno3), "Set 2")
+
+lapply(lys, plotPCA, color_by = "anno3") |>
+  wrap_plots() + plot_layout(guides = "collect") & 
+  thm & scale_color_manual(values = pal, drop = FALSE)
+
+lapply(tls, plotPCA, color_by = "anno3") |>
+  wrap_plots() + plot_layout(guides = "collect") & 
+  thm & scale_color_manual(values = c("red", "blue"))
+```
+
+```{r}
+var <- sapply(tls, \(.) {
+  var <- modelGeneVar(.)$bio
+  setNames(var, rownames(.))
+})
+# top variables across all sample
+o <- order(rowMeans(var), decreasing = TRUE)
+(sel <- rownames(var)[head(o, 12)])
+```
+
+```{r fig.width=12, fig.height=6}
+lapply(tls, \(sce) {
+  lapply(sel, \(g) plotPCA(sce, color_by = g)) |>
+    wrap_plots() + plot_layout(nrow = 3) & coord_equal()
+}) 
+```
+
+```{r fig.width=10, fig.height=8}
+# top variables by sample
+sel <- apply(var, 2, \(.) {
+  o <- order(., decreasing = TRUE)
+  names(.)[head(o, 20)]
+}, simplify = FALSE)
+lapply(names(tls), \(.) {
+  x <- tls[[.]][sel[[.]], ]
+  cd <- data.frame(colData(x))
+  cd <- cd[c("total", "anno3")]
+  hm <- pheatmap(
+    main = .,
+    logcounts(x),
+    scale = "none",
+    annotation_col = cd,
+    show_colnames = FALSE)
+  print(hm)
+})
+```
+
+# Appendix
+
+```{r session-info}
+sessionInfo()
+```

@@ -1,5 +1,5 @@
 execute: 
-  cache: true
+  cache: false
   message: false
   warning: false
 
@@ -10,7 +10,9 @@ project:
   render:
     - index.qmd
     - geo-01-quality.qmd
-    #- geo-02-differential.qmd
+    - geo-02-differential.qmd
+    - vis-01-quality.qmd
+    - vis-02-tls.qmd
 
 format:
   html:
@@ -29,17 +31,8 @@ website:
       - text: GeoMx
         menu:
           - file: geo-01-quality.qmd
-          #- file: geo-02-differential.qmd
-      # - id: visium
-      #   title: Visium
-      #   contents:
-      #     - vis-01-quality.qmd
-      # - id: mapping
-      #   title: Mapping
-      #   contents:
-      #     - file: map-01-exploratory.qmd
-
-
-
-
-
+          - file: geo-02-differential.qmd
+      - text: Visium
+        menu:
+          - file: vis-01-quality.qmd
+          - file: vis-02-tls.qmd

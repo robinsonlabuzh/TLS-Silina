@@ -27,7 +27,7 @@ rd <- read.csv(
   row.names = 1, check.names = FALSE)
 cd <- read.csv(
   file.path(p, "colmd.csv"), 
-  row.names = 5, check.names = FALSE)
+  row.names = 1, check.names = FALSE)
 ```
 
 ### Wrangling
@@ -39,7 +39,6 @@ cd <- read.csv(
 names(cd)[ncol(cd)] <- "LOQ"
 names(cd) <- gsub("_ty", "_Ty", names(cd))
 names(cd) <- gsub("_", "", names(cd))
-cd$TissueSubtype <- gsub("TLSEp", "TLSep", cd$TissueSubtype)
 # construct SCE
 (sce <- SingleCellExperiment(
   list(counts = as.matrix(y)),
@@ -60,18 +59,21 @@ sce <- sce[!is_np,
     sce$neg < 500 &
     sce$RawReads >= 100 &
     sce$AOINucleiCount >= 5]
-# drop LNmet (single sample)
+# drop LNmet (single sample) & TLSep
 sce <- sce[, -grep("LNmet", sce$TissueType)]
-# test whether or not features lie above sample-specific LOQ
+# test whether or not features
+# lie above sample-specific LOQ
 loq <- sweep(assay(sce), 2, sce$LOQ, `>`)
 # keep samples with at least 5% of genes > LOQ
 table(cs <- colMeans(loq) >= 0.05)
- # keep genes > LOQ in at least 10% of samples (by tumor type)
+sce <- sce[, cs]; loq <- loq[, cs]
+# keep genes > LOQ in at least
+# 10% of samples (by tumor type)
 gs <- by(t(loq), sce$TumorType, \(.)
     colnames(.)[colMeans(.) >= 0.1])
 sapply(gs, length)
 gs <- unique(unlist(gs))
-dim(sce <- sce[gs, cs])
+dim(sce <- sce[gs, ])
 ```
 
 ```{r}
@@ -81,10 +83,10 @@ sce$TissueSub[grep("^LN", sce$TissueType)] <- "LN"
 sce$TissueSub[grep("^SFL_TLS", sce$TissueSubtype)] <- "SFL_TLS"
 # reorder factors of interest
 sce$TissueType <- factor(sce$TissueType, c(
-    "TLS", "TLSep", "LN", "Alv", "Kid", "Tum"))
+    "TLS", "LN", "Alv", "Kid", "Tum"))
 sce$TissueSub <- factor(sce$TissueSub, c(
     "E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS", 
-    "TLSep", "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
+    "LN", "Alveoles", "Kidney", "LSCC", "RCC"))
 cd <- data.frame(colData(sce))
 ```
 
@@ -101,15 +103,17 @@ stopifnot(
 #| label: plot-area
 #| code-fold: true
 #| fig-width: 7
-#| fig-height: 3
+#| fig-height: 4
 ggplot(cd, aes(RawReads, AOINucleiCount, col = SlideName)) +
 ggplot(cd, aes(AOISurfaceArea, AOINucleiCount, col = SlideName)) +
-  plot_layout(guides = "collect") & 
+ggplot(cd, aes(RawReads, AOINucleiCount, col = TissueType)) +
+ggplot(cd, aes(AOISurfaceArea, AOINucleiCount, col = TissueType)) +
+  plot_layout(nrow = 2, guides = "collect") & 
   scale_x_log10() & scale_y_log10() &
   geom_point(shape = 16, alpha = 0.5) &
   guides(color = guide_legend(
       override.aes = list(size = 3, alpha = 1))) &
-  theme_bw() & theme(aspect.ratio = 1, 
+  theme_bw() & theme(
       panel.grid.minor = element_blank(),
       legend.key.size = unit(0.5, "lines")) 
 ```
@@ -119,14 +123,17 @@ ggplot(cd, aes(AOISurfaceArea, AOINucleiCount, col = SlideName)) +
 #| code-fold: true
 #| warning: false
 #| fig-width: 8
-#| fig-height: 3
+#| fig-height: 4
+alv <- cd$TissueType == "Alv"
 ggplot(cd, aes(RawReads, col = SlideName)) +
-ggplot(cd, aes(RawReads, col = PatientID)) &
+ggplot(cd, aes(RawReads, col = PatientID)) +
+ggplot(cd[!alv, ], aes(RawReads, col = TissueType)) +
+ggplot(cd[!alv, ], aes(RawReads, col = TissueSubtype)) +
+  plot_layout(nrow = 2) &
   geom_density(key_glyph = "point") & 
   guides(color = guide_legend(
       override.aes = list(size = 3, alpha = 1))) &
   scale_x_log10() & theme_bw() & theme(
-    aspect.ratio = 1, 
     legend.justification = c(0, 0.5),
     legend.key.size = unit(0.5, "lines")) 
 ```

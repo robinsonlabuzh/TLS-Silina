@@ -1,0 +1,256 @@
+# Quality
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(cache = FALSE, cache.lazy = FALSE)
+```
+
+## Preamble
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+library(dplyr)
+library(tidyr)
+library(scran)
+library(scater)
+library(Matrix)
+library(ggplot2)
+library(patchwork)
+library(RColorBrewer)
+library(SpatialExperiment)
+```
+
+```{r}
+#| label: load-utils
+#| cache: false
+#| echo: false
+source("utils.R")
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+dir <- file.path("..", "data", "Visium")
+ids <- list.dirs(dir, recursive = FALSE)
+ids <- ids[grep("^B[0-9]+", basename(ids))]
+names(ids) <- gsub("_[0-9]*$", "", basename(ids))
+spe <- read10xVisium(ids, type = "HDF5", images = "lowres")
+# make barcodes/spot identifiers unique
+spe$barcode <- colnames(spe); colnames(spe) <- 
+    paste(spe$sample_id, spe$barcode, sep = ".")
+# sparsify counts
+y <- as.matrix(assay(spe))
+y <- as(y, "dgCMatrix")
+assay(spe) <- y
+```
+
+```{r}
+#| dependson: load-data
+#| label: load-md
+md <- read.csv(file.path(dir, "metadata", "md.csv"))
+md <- md[!is.na(md$Used.for.10x), ]
+md$sample_id <- gsub("-", "_", md$B.number)
+idx <- match(spe$sample_id, md$sample_id)
+table(spe$TumorType <- factor(md$Tumor.type[idx]))
+```
+
+```{r}
+#| dependson: load-md
+#| echo: false
+stopifnot(!any(is.na(spe$TumorType)))
+```
+
+```{r}
+#| dependson: load-data
+#| label: load-anno
+csv1 <- file.path(dir, "metadata", "labels_all.csv")
+csv2 <- file.path(dir, "metadata", "labels_tls.csv")
+lab1 <- read.csv(csv1, row.names = 1)
+lab2 <- read.csv(csv2, row.names = 1)
+lab1$TLS[lab1$TLS == ""] <- NA
+lab2$TLS[lab2$TLS == ""] <- NA
+spe$anno1 <- factor(NA, unique(lab1$TLS))
+spe$anno2 <- factor(NA, unique(lab2$TLS))
+lab2 <- cbind(lab2, lab1[, c("Barcode", "Patient_ID")])
+idx0 <- split(seq(ncol(spe)), spe$sample_id)
+lab1 <- split(lab1, lab1$Patient_ID)
+lab2 <- split(lab2, lab2$Patient_ID)
+for (. in names(ids)) {
+    bcs1 <- gsub("-[0-9]$", "-1", lab1[[.]]$Barcode)
+    bcs2 <- gsub("-[0-9]$", "-1", lab2[[.]]$Barcode)
+    bcs0 <- spe$barcode[idx0[[.]]]
+    idx1 <- match(bcs0, bcs1)
+    idx2 <- match(bcs0, bcs2)
+    spe$anno1[idx0[[.]]] <- lab1[[.]]$TLS[idx1]
+    spe$anno2[idx0[[.]]] <- lab2[[.]]$TLS[idx2]
+}
+table(spe$sample_id, spe$anno1)
+table(spe$sample_id, spe$anno2)[1:5, 1:6]
+```
+
+### Wrangling
+
+```{r}
+#| dependson: load-md
+#| label: prep-data
+rd <- rowData(spe)
+rd$ensembl <- rownames(spe)
+rownames(spe) <- make.names(rd$symbol)
+spatialCoordsNames(spe) <- c("x", "y")
+spe$sample_id <- factor(spe$sample_id)
+```
+
+```{r}
+#| dependson: prep-data
+#| label: spe
+spe <- logNormCounts(spe, transform = "none")
+spe <- logNormCounts(spe, transform = "log")
+```
+
+## Quality
+
+```{r}
+#| dependson: spe
+#| label: calc-qc
+# add gene-(sample-) & spot-level QC summaries 
+sub <- split(seq(ncol(spe)), spe$sample_id)
+spe <- addPerFeatureQC(spe, subsets = sub)
+spe <- addPerCellQC(spe)
+# get tables of gene & spot metadata
+rd <- .df(spe, margin = 1)
+cd <- .df(spe, margin = 2)
+```
+
+### Genes
+
+```{r}
+#| dependson: calc-qc
+#| code-fold: true
+#| label: plot-rd
+#| fig-width: 8
+#| fig-height: 3
+dr <- rd %>% 
+    select(matches("subsets.*detected")) %>% 
+    pivot_longer(everything()) %>% 
+    mutate(sample_id = gsub("subsets_(.*)_detected", "\\1", name))
+ggplot(dr, aes(value, col = sample_id)) &
+    labs(x = "% of cells with non-zero count") &
+    geom_density(key_glyph = "point") & scale_x_sqrt() & 
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) &
+    theme_bw() & theme(aspect.ratio = 2/3, 
+        panel.grid.minor = element_blank(), 
+        legend.key.size = unit(0.5, "lines")) 
+```
+
+### Spots
+
+```{r}
+#| dependson: calc-qc
+#| code-fold: true
+#| label: plot-cd
+#| fig-width: 7
+#| fig-height: 4
+ggplot(cd, aes(total, col = sample_id)) +
+ggplot(cd, aes(detected, col = sample_id)) +
+ggplot(cd, aes(total, col = anno1)) +
+ggplot(cd, aes(detected, col = anno1)) +
+    plot_layout(nrow = 2, guides = "collect") &
+    geom_density(key_glyph = "point") & scale_x_log10() & 
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) &
+    theme_bw() & theme(legend.key.size = unit(0.5, "lines")) 
+```
+
+```{r}
+#| label: plot-xy-det
+#| dependson: calc-qc
+#| code-fold: true
+#| fig-width: 12
+#| fig-height: 7
+cd %>% 
+  group_by(sample_id) %>% 
+  mutate(total = .scale01(log10(total))) %>% 
+  ggplot(aes(x, y, col = total)) +
+  geom_point(shape = 16, size = 1) +
+  facet_wrap(~ sample_id, nrow = 2) +
+  scale_color_viridis_c() +
+  coord_equal() + theme_void() +
+  theme(legend.position = "none")
+```
+
+```{r}
+#| label: plot-xy-lab
+#| code-fold: true
+#| dependson: spe
+#| fig-width: 12
+#| fig-height: 7
+cd %>% 
+  ggplot(aes(x, y, col = anno1)) +
+  geom_point(shape = 16, size = 1) +
+  facet_wrap(~ sample_id, nrow = 2) +
+  coord_equal() + theme_void() +
+  theme(legend.position = "bottom") +
+  guides(col = guide_legend(nrow = 1, 
+      override.aes = list(size = 3)))
+```
+
+```{r fig.width=8, fig.height=3.5}
+#| label: plot-bars
+#| code-fold: true
+#| dependson: spe
+#| fig-width: 8
+#| fig-height: 3.5
+ns <- as.data.frame(table(sample_id = spe$sample_id, anno1 = spe$anno1))
+ggplot(ns, aes(anno1, Freq, fill = anno1)) +
+    facet_wrap(~ sample_id, scales = "free_y", nrow = 2) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(y = "# spots") + theme_bw() + theme(
+        panel.grid.minor = element_blank(),
+        legend.key.size = unit(0.5, "lines"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(ns, aes(sample_id, Freq, fill = sample_id)) +
+    facet_wrap(~ anno1, scales = "free_y", nrow = 2) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(y = "# spots") + theme_bw() + theme(
+        panel.grid = element_blank(),
+        legend.key.size = unit(0.5, "lines"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Filtering
+
+```{r}
+#| code-fold: false
+#| label: filtering
+# drop genes/spots without 
+# any detected spots/genes
+y <- counts(spe) > 1
+sub <- spe[
+    rowSums(y) > 1,
+    colSums(y) > 1]
+cbind(
+    raw = dim(spe), 
+    fil = dim(sub))
+```
+
+## Appendix
+
+### Saving
+
+```{r}
+#| label: save-data
+saveRDS(spe, "../outs/01-spe.rds")
+```
+
+::: {.callout-note icon=false, collapse=true}
+
+### Session info
+
+```{r}
+#| label: session-info
+#| code-fold: false
+sessionInfo()
+```
+
+:::

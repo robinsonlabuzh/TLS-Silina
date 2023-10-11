@@ -1,0 +1,288 @@
+# Exploratory
+
+## Preamble
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+library(edgeR)
+library(scran)
+library(scater)
+library(harmony)
+library(ggplot2)
+library(pheatmap)
+library(patchwork)
+library(BiocParallel)
+library(SpatialExperiment)
+```
+
+```{r}
+#| label: load-utils
+#| cache: false
+#| echo: false
+source("utils.R")
+```
+
+```{r}
+#| label: set-threads
+bp <- MulticoreParam(5)
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+spe <- readRDS("../outs/01-spe.rds")
+# exclude unassigned & 
+# spots tagged for exclusion
+nan <- is.na(spe$anno1)
+rmv <- grepl("EXCL", spe$anno1)
+sub <- spe[, !(nan | rmv)]
+sub$anno1 <- droplevels(sub$anno1)
+table(sub$sample_id, sub$anno1)
+```
+
+### Wrangling
+
+```{r}
+#| label: prep-data
+#| dependson: load-data
+idx <- sub$TumorType == "ccRCC"
+idx <- split(seq(ncol(sub)), idx)
+names(idx) <- c("lun", "kid")
+lys <- lapply(idx, \(.) sub[, .])
+```
+
+## Bulking
+
+```{r}
+#| label: pbs
+names(ids) <- ids <- c("anno1", "anno2")
+pbs <- lapply(ids, \(.) {
+  y <- aggregateAcrossCells(sub, colData(sub)[c("sample_id", .)])
+  z <- calcNormFactors(DGEList(assay(y), remove.zeros = TRUE))
+  assay(y, "normcounts", FALSE) <- cpm.DGEList(z, log = FALSE)
+  assay(y, "logcounts" , FALSE) <- cpm.DGEList(z, log = TRUE )
+  mds <- plotMDS.DGEList(z, plot = FALSE)
+  mds <- data.frame(MDS1 = mds$x, MDS2 = mds$y)
+  reducedDim(y, "MDS") <- as.matrix(mds)
+  colnames(y) <- seq(ncol(y)); return(y)
+})
+```
+
+::: {.panel-tabset}
+
+### low-res.
+
+```{r fig.width=8, fig.height=2}
+plotMDS(pbs$anno1, color_by="anno1") +
+plotMDS(pbs$anno1, color_by="TumorType") +
+plotMDS(pbs$anno1, color_by="sample_id") +
+plot_layout(nrow = 1) & coord_equal()
+```
+
+### high-res.
+
+```{r fig.width=10, fig.height=2}
+pbs$anno3 <- pbs$anno2
+pbs$anno3$anno3 <- as.character(pbs$anno3$anno2)
+pbs$anno3$anno3[grep(".*MTLS", pbs$anno3$anno3)] <- "MTLS"
+pbs$anno3$anno3[grep(".*ETLS", pbs$anno3$anno3)] <- "ETLS"
+plotMDS(pbs$anno3, color_by="anno3") +
+plotMDS(pbs$anno3, color_by="TumorType") +
+plotMDS(pbs$anno3, color_by="sample_id") +
+plot_layout(nrow = 1) & coord_equal()
+```
+
+:::
+
+## Markers
+
+### de novo
+
+```{r fig.width = 8, fig.height = 12}
+#| label: markers-new
+#| dependson: prep-data
+for (tmp in lys) {
+  mgs <- findMarkers(tmp,
+    block = tmp$sample_id,
+    groups = droplevels(tmp$anno1),
+    direction = "up",
+    BPPARAM = bp)
+  top <- lapply(mgs, \(df) {
+    fil <- df$Top <= 10
+    rownames(df)[fil]
+  })
+  length(top <- unique(unlist(top)))
+  cd <- c("TumorType", "sample_id", "anno1")
+  cd <- data.frame(colData(tmp)[cd])
+  # pheatmap(
+  #     logcounts(tmp)[c("CLU", "CORO1A", top), ],
+  #     show_colnames = FALSE,
+  #     cluster_rows = FALSE,
+  #     annotation_col = cd,
+  #     scale = "none")
+  pheatmap(logcounts(pbs$anno1)[c("CLU", top), pbs$anno1$TumorType == "LSCC"], 
+    annotation_col = data.frame(colData(pbs$anno1)[c("sample_id", "anno1")]), 
+    scale = "row")
+}
+```
+
+### GeoMx
+
+```{r fig.width = 8, fig.height = 8}
+#| label: markers-old
+dge <- readRDS("../outs/02-dge.rds")
+for (tt in c("RCC", "LSCC")) {
+  dgf <- dge[dge$subset == tt & dge$FDR < 0.05 & dge$logFC > 1, ]
+  tt <- ifelse(tt == "RCC", "kid", "lun")
+  cd <- c("TumorType", "sample_id", "anno1")
+  cd <- data.frame(colData(lys[[tt]])[cd])
+  gs <- intersect(dgf$gene, rownames(lys[[tt]]))
+  pheatmap(
+      logcounts(lys[[tt]])[gs, ],
+      show_colnames = FALSE,
+      annotation_col = cd,
+      scale = "none")
+}
+```
+
+## Selection
+
+```{r}
+#| label: selection
+#| dependson: prep-data
+lys <- lapply(lys, \(.) {
+    tbl <- modelGeneVar(., block = .$sample_id, BPPARAM = bp)
+    rowData(.)$hvg <- hvg <- tbl$bio > 0
+    runPCA(., subset_row = hvg, BPPARAM = bp)
+})
+```
+
+## Integration
+
+```{r}
+#| label: integration
+#| dependson: selection
+set.seed(29)
+lys <- lapply(lys, \(.) {
+    emb <- HarmonyMatrix(
+        reducedDim(., "PCA"),
+        do_pca = FALSE, verbose = FALSE,
+        meta_data = droplevels(.$sample_id))
+    reducedDim(., "EMB") <- emb
+    colnames(emb) <- paste0("EMB", seq(ncol(emb)))
+    . <- runUMAP(., dimred = "EMB", BPPARAM = bp)
+    map <- reducedDim(., "UMAP")
+    colnames(map) <- paste0("UMAP", seq(ncol(map)))
+    return(.)
+})
+```
+
+## Visualization
+
+```{r}
+#| label: cd
+set.seed(94)
+cd <- lapply(lys, \(.) {
+    df <- .df(., margin = 2)
+    df[sample(nrow(df)), ]
+})
+```
+
+### Reduction
+
+::: {.panel-tabset}
+
+```{r fig.width = 12, fig.height = 3}
+#| results: asis
+for (. in names(lys)) {
+    p <- 
+    ggplot(cd[[.]], aes(UMAP1, UMAP2, col = TumorType)) +
+    ggplot(cd[[.]], aes(UMAP1, UMAP2, col = sample_id)) +
+    ggplot(cd[[.]], aes(UMAP1, UMAP2, col = anno1)) +
+        plot_layout(nrow = 1) &
+        scale_color_brewer(na.value = "grey", palette = "Spectral") &
+        guides(col = guide_legend(override.aes = list(alpha = 1, size = 3))) &
+        geom_point(shape = 16, size = 0.1) &
+        theme_void() & theme(aspect.ratio = 1,
+            legend.key.size = unit(0.75, "lines"))
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+::::
+
+```{r}
+#| label: pal
+pal <- list(
+  TumorType = c(LSCC = "black", LUAD = "black", RCC = "grey"),
+  sample_id = c(
+      setNames(hcl.colors(3, "reds"), unique(spe$sample_id[spe$TumorType == "ccRCC"])),
+      setNames(hcl.colors(5, "blues"), unique(spe$sample_id[spe$TumorType != "ccRCC"]))))
+n <- length(l <- unique(spe$label))
+tmp <- setNames(hcl.colors(n, "spectral"), l)
+pal <- c(pal, list(label = tmp))
+```
+
+### Pseuodbulk-MDS
+
+```{r}
+#| label: pbs
+ids <- colData(spe)[c("sample_id", "anno1")]
+hvg <- rowAnys(sapply(lys, \(.) rowData(.)$hvg))
+pbs <- aggregateAcrossCells(spe, ids, subset_row = hvg)
+dgl <- edgeR::calcNormFactors(edgeR::DGEList(assay(pbs)))
+mds <- edgeR::plotMDS.DGEList(dgl, plot = FALSE)
+mds <- data.frame(MDS1 = mds$x, MDS2 = mds$y)
+reducedDim(pbs, "MDS") <- as.matrix(mds)
+```
+
+```{r fig.width = 12, fig.height = 3}
+#| label: plot-mds
+lapply(
+    c("TumorType", "sample_id", "anno1"), \(.)
+    plotMDS(pbs, point_alpha = 0.8, point_size = 2, color_by = .)) |>
+    wrap_plots(nrow = 1) &
+    guides(color = guide_legend(
+        override.aes = list(alpha = 1, size = 2))) &
+    coord_equal() & theme_bw() & theme(
+        panel.grid.minor = element_blank(),
+        legend.key.size = unit(0.5, "lines"))
+```
+
+```{r}
+#| label: plot-umap
+#| dependson: cd
+ggplot(cd, aes(UMAP1, UMAP2, col = sample_id)) +
+    facet_grid(~ TumorType, scales = "free") +
+    geom_point(size = 0.5, alpha = 0.5) +
+    scale_color_brewer(palette = "Set2") +
+    theme_void() + theme(aspect.ratio = 1)
+```
+
+# Markers
+
+```{r}
+mgs <- findMarkers(spe, spe$anno1, direction = "up")
+```
+
+## Appendix
+
+```{r}
+#| label: save-data
+saveRDS(spe, file.path("..", "outs", "02-spe.rds"))
+```
+
+::: {.callout-note icon=false, collapse=true}
+
+### Session info
+
+```{r}
+#| label: session-info
+#| code-fold: false
+sessionInfo()
+```
+
+:::

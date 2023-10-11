@@ -1,0 +1,174 @@
+# Quality
+
+## Preamble
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+library(scran)
+library(scater)
+library(harmony)
+library(patchwork)
+library(BiocParallel)
+```
+
+```{r}
+#| label: load-utils
+#| cache: false
+#| echo: false
+source("utils.R")
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+dir <- file.path("..", "outs")
+sce <- readRDS(file.path(dir, "01-sce.rds"))
+spe <- readRDS(file.path(dir, "01-spe.rds"))
+spe <- spe[, !is.na(spe$label)] # exclude unassigned
+```
+
+### Wrangling
+
+```{r}
+#| dependson: load-data
+#| label: prep-data
+sce$sample_id <- gsub("^r", "", sce$PatientID)
+sce$sample_id <- gsub("24136", "24137", sce$sample_id)
+spe$sample_id <- gsub(".*_(.*)", "\\1", spe$sample_id)
+(ids <- intersect(sce$sample_id, spe$sample_id))
+sce <- sce[, sce$sample_id %in% ids]
+spe <- spe[, spe$sample_id %in% ids]
+```
+
+## Processing
+
+```{r}
+bp <- MulticoreParam(4)
+spe <- logNormCounts(spe)
+# idx_sce <- split(seq(ncol(sce)), sce$TumorType == "RCC")
+# idx_spe <- split(seq(ncol(spe)), spe$TumorType == "ccRCC")
+# names(tts) <- tts <- c("kid", "lun")
+# names(idx_sce) <- names(idx_spe) <- tts
+idx_sce <- split(seq(ncol(sce)), sce$sample_id)
+idx_spe <- split(seq(ncol(spe)), spe$sample_id)
+sce_lys <- lapply(idx_sce, \(.) sce[, .])
+spe_lys <- lapply(idx_spe, \(.) spe[, .])
+```
+
+### Integration
+
+```{r}
+spe_lys <- lapply(spe_lys, \(spe) {
+    tbl <- modelGeneVar(spe)#, block = spe$sample_id)
+    rowData(spe)$hvg <- (hvg <- tbl$bio > 0)
+    hvg <- intersect(rownames(spe)[hvg], rownames(sce))
+    spe <- runPCA(spe, subset_row = hvg)
+    # mtx <- reducedDim(spe, "PCA")
+    # emb <- HarmonyMatrix(mtx,
+    #     meta_data = spe$sample_id,
+    #     do_pca = FALSE, verbose = FALSE)
+    # reducedDim(spe, "EMB") <- emb
+    return(spe)
+})
+```
+
+### Mapping
+
+```{r}
+set.seed(29)
+gs <- intersect(rownames(sce), rownames(spe))
+drs <- bpmapply(
+    SIMPLIFY = FALSE, BPPARAM = bp,
+    spe = spe_lys, sce = sce_lys, \(sce, spe) {
+        # . <- ids[5]
+        # sce <- sce_lys[[.]]
+        # spe <- spe_lys[[.]]
+        # hvg_sce <- modelGeneVar(sce[gs, ])$bio > 1
+        # hvg_spe <- modelGeneVar(spe[gs, ])$bio > 0
+        # hvg <- intersect(gs[hvg_sce], gs[hvg_spe])
+        # sce <- runPCA(sce, subset_row = hvg, ncomponents = 4)
+        # spe <- runPCA(spe, subset_row = hvg, ncomponents = 4)
+        mtx <- rbind(
+            reducedDim(sce, "PCA"),
+            reducedDim(spe, "PCA"))
+        ids <- c(
+            #sce$sample_id,
+            rep("sce", ncol(sce)),
+            rep("spe", ncol(spe)))
+        emb <- HarmonyMatrix(mtx, 
+            meta_data = ids, 
+            reference_values = "spe",
+            do_pca = FALSE, verbose = FALSE)
+        map <- calculateUMAP(emb, transposed = TRUE)
+        list(emb = emb, map = map)
+    })
+for (. in ids) {
+    idx <- seq(ncol(sce_lys[[.]]))
+    reducedDim(sce_lys[[.]], "UMAP") <- drs[[.]]$map[ idx, ]
+    reducedDim(spe_lys[[.]], "UMAP") <- drs[[.]]$map[-idx, ]
+}
+```
+
+```{r fig.width=10, fig.height=5}
+ps <- lapply(ids, \(.) {
+    ggplot(
+        .df(spe_lys[[.]], margin = 2), 
+        aes(UMAP1, UMAP2, col = label)) +
+        geom_point(shape = 16, size = 0.2) +
+        geom_point(
+            aes(fill = TissueSub),
+            data = .df(sce_lys[[.]], margin = 2), 
+            shape = 21, size = 3, stroke = 0.5, col = "black") +
+        guides(
+            col = guide_legend(order = 1, override.aes = list(size = 3)),
+            fill = guide_legend(override.aes = list(size = 3))) +
+        scale_color_brewer(palette = "Set1", na.value = "grey") +
+        scale_fill_brewer(palette = "Set1", na.value = "grey") +
+        ggtitle(.) + theme_void() + theme(
+            aspect.ratio = 1,
+            legend.key.size = unit(0.5, "lines"))
+})
+wrap_plots(ps, nrow = 2)  
+
+ps <- lapply(ids, \(.) {
+    ggplot(
+        .df(spe_lys[[.]], margin = 2), 
+        aes(UMAP1, UMAP2, col = sample_id)) +
+        geom_point(shape = 16, size = 0.2) +
+        geom_point(
+            aes(fill = sample_id),
+            data = .df(sce_lys[[.]], margin = 2), 
+            shape = 21, size = 3, stroke = 0.5, col = "black") +
+        guides(
+            col = guide_legend(order = 1, override.aes = list(size = 3)),
+            fill = guide_legend(override.aes = list(size = 3))) +
+        scale_color_brewer(palette = "Set1", na.value = "grey") +
+        scale_fill_brewer(palette = "Set1", na.value = "grey") +
+        ggtitle(.) + theme_void() + theme(
+            aspect.ratio = 1,
+            legend.key.size = unit(0.5, "lines"))
+})
+wrap_plots(ps, nrow = 2)  
+```
+
+## Appendix
+
+```{r}
+#| label: save-data
+
+```
+
+::: {.callout-note icon=false, collapse=true}
+
+### Session info
+
+```{r}
+#| label: session-info
+#| code-fold: false
+sessionInfo()
+```
+
+:::

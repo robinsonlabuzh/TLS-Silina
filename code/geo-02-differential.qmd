@@ -50,71 +50,112 @@ sce <- readRDS(file.path("..", "outs", "01-sce.rds"))
 
 ```{r}
 #| label: subset
-# exclude LN & TLSep from analysis
-sub <- sce[, !sce$TissueSub %in% c("LN", "TLSep")]
+# exclude LN for DGE analysis
+sub <- sce[, sce$TissueSub != "LN"]
 df <- data.frame(colData(sub), t(logcounts(sub)), check.names = FALSE)
 gg <- pivot_longer(df, any_of(rownames(sub)), names_to = "gene", values_to = "expr")
 ```
 
 ```{r}
-#| label: models
-# split by tumor type
-dat <- list(
+#| label: groups
+# setup subtype groupings
+names(tum) <- tum <- c("RCC", "LSCC")
+names(kid) <- kid <- c("Kidney", "RCC")
+names(lun) <- lun <- c("Alveoles", "LSCC")
+names(tls) <- tls <- c("E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS")
+# split data by tumor type & TLS
+dat <- c(list(all = sub,
     RCC = sub[, sub$TumorType == "RCC"], 
-    LSCC = sub[, sub$TumorType == "LSCC"])
-ref <- c(RCC = "Kidney", LSCC = "Alveoles")
-fit <- mapply(
-    SIMPLIFY = FALSE,
-    sce = dat, typ = names(dat), 
-    \(sce, typ) {
-        # setup design matrix
-        df <- data.frame(colData(sce))
+    LSCC = sub[, sub$TumorType == "LSCC"]),
+    lapply(tls, \(.) sub[, sub$TissueSub == .]))
+```
+
+
+```{r}
+#| label: models
+ref <- c(
+    all = unname(kid[1]),
+    RCC = unname(kid[1]), 
+    LSCC = unname(lun[1]), 
+    sapply(tls, \(.) "LSCC"))
+names(ids) <- ids <- names(dat)
+dat <- dat[ids]; ref <- ref[ids]
+fit <- lapply(ids, \(.) {
+    # setup design matrix
+    df <- data.frame(colData(dat[[.]]))
+    if (. %in% tls) {
+        tt <- factor(df$TumorType)
+        df$TumorType <- relevel(tt, ref[.])
+        mm <- model.matrix(~0+TumorType, df)
+        colnames(mm) <- gsub("TumorType", "", colnames(mm))
+    } else {
         st <- droplevels(df$TissueSub)
-        df$TissueSub <- relevel(st, ref[typ])
+        df$TissueSub <- relevel(st, ref[.])
         mm <- model.matrix(~0+TissueSub, df)
         colnames(mm) <- gsub("TissueSub", "", colnames(mm))
-        # fit GLM model
-        dgl <- DGEList(assay(sce))
-        dgl <- calcNormFactors(dgl)
-        dgl <- estimateDisp(dgl, mm)
-        fit <- glmQLFit(dgl, mm)
-    })
+    }
+    # fit GLM model
+    dgl <- DGEList(assay(dat[[.]]))
+    dgl <- calcNormFactors(dgl)
+    dgl <- estimateDisp(dgl, mm)
+    fit <- glmQLFit(dgl, mm)
+})
 ```
 
 ```{r}
 #| label: constrasts
 # setup contrasts
-names(kid) <- kid <- c("Kidney", "RCC")
-names(lun) <- lun <- c("Alveoles", "LSCC")
-names(tls) <- tls <- c("E_TLS", "SFL_TLS", "PFL_TLS", "Tcell_TLS")
-grp <- list(
-    RCC = c(list(TLS = list(kid, tls)), lapply(tls, \(t) list(kid, t))),
-    LSCC = c(list(TLS = list(lun, tls)), lapply(tls, \(t) list(lun, t))))
-cs <- mapply(
-    t = names(grp), g = grp,
-    SIMPLIFY = FALSE, \(t, g) {
-        lapply(g, \(c) {
-            cs <- numeric(ncol(mm <- fit[[t]]$design))
+cs <- c(list(
+    # within tumor types
+    RCC = c(
+        # normal/tumor vs. any TLS
+        list(TLS = list(kid, tls)), 
+        # normal/tumor vs. specific TLS
+        lapply(tls, \(t) list(kid, t)),
+        # TLS maturation stages
+        list(
+            SFL = list("E_TLS", "SFL_TLS"),
+            Tcell = list("E_TLS", "Tcell_TLS"))),
+    LSCC = c(
+        # normal/tumor vs. any TLS
+        list(TLS = list(lun, tls)), 
+        # normal/tumor vs. specific TLS
+        lapply(tls, \(t) list(lun, t)),
+        # TLS maturation stages
+        list(
+            SFL = list("E_TLS", "SFL_TLS"),
+            Tcell = list("E_TLS", "Tcell_TLS")))),
+    # kidney/RCC vs. lung/LSCC
+    list(all = list(parenchyma = list(kid, lun))),
+    # across tumor types, within TLS subsets
+    lapply(tls, \(.) setNames(list("RCC"), .)))
+cs <- lapply(ids, \(.) {
+    x <- numeric(ncol(mm <- fit[[.]]$design))
+    lapply(cs[[.]], \(c) {
+        if (length(c) == 1) {
+            i <- match(c, colnames(mm))
+            x[i] <- 1; x[-i] <- -1
+        } else {
             a <- match(c[[1]], colnames(mm))
             b <- match(c[[2]], colnames(mm))
-            cs[a] <- -1/sum(ref != 0)
-            cs[b] <- 1/sum(tls != 0)
-            return(cs)
-        })
+            x[a] <- -1/sum(a != 0)
+            x[b] <- 1/sum(b != 0)
+        }
+        return(x)
     })
+})
 ```
 
 ```{r}
 #| label: testing
 # run DGE analysis
-names(typ) <- typ <- names(grp)
-res <- lapply(typ, \(t) {
-    lapply(names(cs[[t]]), \(c) {
-        ht <- glmQLFTest(fit[[t]], contrast = cs[[t]][[c]])
+res <- lapply(ids, \(.) {
+    lapply(names(cs[[.]]), \(c) {
+        ht <- glmQLFTest(fit[[.]], contrast = cs[[.]][[c]])
         tt <- topTags(ht, n = Inf)$table
         data.frame(row.names = NULL,
             gene = rownames(tt), tt,
-            contrast = c, TumorType = t)
+            contrast = c, subset = .)
     }) |> do.call(what = rbind)
 }) |> do.call(what = rbind)
 rownames(res) <- NULL
@@ -124,36 +165,117 @@ rownames(res) <- NULL
 
 ### Volcano
 
-```{r fig.width=6, fig.height=4}
-#| label: plot-volcano
+```{r fig.width=5, fig.height=6}
+#| label: plot-volcano-all
+#| dependson: testing
 #| code-fold: true
-ps <- lapply(typ, \(t) {
-    df <- filter(res, TumorType == t, contrast == "TLS")
-    .volcano(df, title = t, fdr = 1e-4, lfc = 1.25)
+df <- res[res$subset == "all", ]
+.volcano(df, title = "parenchyma", fdr = 0.05, lfc = 1) + 
+    theme(legend.position = "top")
+```
+
+```{r fig.width=6, fig.height=4}
+#| label: plot-volcano-tum
+#| dependson: testing
+#| code-fold: true
+ps <- lapply(tum, \(.) {
+    df <- res[res$subset == . & res$contrast == "TLS", ]
+    .volcano(df, title = ., fdr = 1e-4, lfc = 1.25)
 })
 wrap_plots(ps, nrow = 1) + 
   plot_layout(guides = "collect") &
   theme(legend.position = "top")
 ```
 
+```{r fig.width=6, fig.height=8}
+#| label: plot-volcano-tls
+#| dependson: testing
+#| code-fold: true
+ps <- lapply(tls, \(.) {
+    df <- res[res$subset == . & grepl("TLS", res$contrast), ]
+    .volcano(df, title = ., fdr = 1e-3, lfc = 0.5)
+})
+wrap_plots(ps, nrow = 2) + 
+  plot_layout(guides = "collect") &
+  theme(legend.position = "top")
+```
+
+```{r fig.width=6, fig.height=8}
+#| label: plot-volcano-mat
+#| dependson: testing
+#| code-fold: true
+df <- res[res$contrast %in% c("SFL", "Tcell"), ]
+ps <- lapply(unique(df$subset), \(s) {
+    lapply(unique(df$contrast), \(c) {
+        df <- res[res$subset == s & res$contrast == c, ]
+        .volcano(df, fdr = 1e-4, lfc = 1.25, title = paste(s, c, sep = ","))
+    })
+})
+wrap_plots(Reduce(c, ps), nrow = 2) + 
+  plot_layout(guides = "collect") &
+  theme(legend.position = "top")
+```
+
 ### Heatmap
 
-```{r}
-#| label: plot-heatmap
+```{r fig.width=8, fig.height=8}
+#| label: plot-heatmap-all
+#| dependson: testing
 #| code-fold: true
 #| results: asis
 top <- res %>%
-    group_by(TumorType) %>%
+    filter(FDR < 0.05) %>% 
+    filter(subset == "all") %>%
+    slice_max(abs(logFC), n = 80)
+mtx <- logcounts(sub)[top$gene, sub$TissueSub %in% c(kid, lun)]
+cd <- data.frame(colData(sub))[c("TissueSub")]
+hm <- pheatmap(mtx, 
+    main = "parenchyma", fontsize = 6,
+    col = rev(hcl.colors(51, "RdBu")),
+    scale = "row", show_colnames = FALSE, annotation_col = cd)
+```
+
+```{r}
+#| label: plot-heatmap-tum
+#| dependson: testing
+#| code-fold: true
+#| results: asis
+top <- res %>%
+    filter(!subset %in% tls) %>%
+    group_by(subset) %>%
     filter(FDR < 0.1, contrast == "TLS") %>% 
-    slice_max(logFC, n = 40) %>% 
-    group_split() %>% 
-    setNames(names(grp))
-for (t in names(top)) {
-    cat("####", t, "\n")
-    mtx <- logcounts(sub)[top[[t]]$gene, sub$TumorType == t]
+    slice_max(abs(logFC), n = 40) %>% 
+    split(.$subset)
+for (. in names(top)) {
+    cat("####", ., "\n")
+    mtx <- logcounts(sub)[top[[.]]$gene, sub$TumorType == .]
     cd <- data.frame(colData(sub))[c("TissueSub")]
     hm <- pheatmap(mtx, 
-        main = t, fontsize = 6,
+        main = ., fontsize = 6,
+        col = rev(hcl.colors(51, "RdBu")),
+        scale = "row", show_colnames = FALSE, annotation_col = cd)
+    print(hm); cat("\n\n")
+}
+```
+
+```{r}
+#| label: plot-heatmap-mat
+#| dependson: testing
+#| code-fold: true
+#| results: asis
+top <- res %>%
+    group_by(subset) %>%
+    filter(contrast %in% c("SFL", "Tcell")) %>%
+    slice_max(abs(logFC), n = 40) %>% 
+    split(.$subset)
+for (. in names(top)) {
+    cat("####", ., "\n")
+    idx <- sub$TumorType == . & sub$TissueSub %in% c(
+        "E_TLS", paste0(unique(top[[.]]$contrast), "_TLS"))
+    mtx <- logcounts(sub)[top[[.]]$gene, idx]
+    cd <- data.frame(colData(sub))[c("TissueSub")]
+    hm <- pheatmap(mtx, 
+        main = ., fontsize = 6,
         col = rev(hcl.colors(51, "RdBu")),
         scale = "row", show_colnames = FALSE, annotation_col = cd)
     print(hm); cat("\n\n")
@@ -165,23 +287,24 @@ for (t in names(top)) {
 ::: {.panel-tabset}
 
 ```{r fig.width=8, fig.height=5}
-#| label: plot-boxplot
+#| label: plot-boxplot-tum
+#| dependson: testing
 #| code-fold: true
 #| fig-width: 8
 #| fig-height: 5
 #| results: asis
 top <- res %>%
-    group_by(TumorType) %>%
+    filter(!subset %in% tls) %>%
+    group_by(subset) %>%
     filter(FDR < 0.05, contrast == "TLS") %>% 
-    slice_max(logFC, n = 25) %>% 
-    group_split() %>% 
-    setNames(names(grp))
-for (t in typ) {
-    cat("####", t, "\n")
+    slice_max(abs(logFC), n = 25) %>% 
+    split(.$subset)
+for (. in names(top)) {
+    cat("####", ., "\n")
     plt <- ggplot(
         filter(gg, 
-            TumorType == t,
-            gene %in% top[[t]]$gene),
+            TumorType == .,
+            gene %in% top[[.]]$gene),
         aes(TissueSub, expr, fill = TissueSub)) +
         facet_wrap(~ gene, scales = "free_y") +
         geom_boxplot(size = 0.1, fill = NA, outlier.color = NA, show.legend = FALSE) + 
@@ -202,10 +325,47 @@ for (t in typ) {
 
 :::
 
+```{r fig.width=8, fig.height=5}
+#| label: plot-boxplot-tls
+#| dependson: testing
+#| code-fold: true
+#| fig-width: 8
+#| fig-height: 5
+#| results: asis
+top <- res %>%
+    filter(subset %in% tls) %>%
+    group_by(subset) %>%
+    slice_max(abs(logFC), n = 25) %>% 
+    split(.$subset)
+for (. in names(top)) {
+    cat("####", ., "\n")
+    plt <- ggplot(
+        filter(gg, 
+            TissueSub == .,
+            gene %in% top[[.]]$gene),
+        aes(TumorType, expr, fill = TumorType)) +
+        facet_wrap(~ gene, scales = "free_y") +
+        geom_boxplot(size = 0.1, fill = NA, outlier.color = NA, show.legend = FALSE) + 
+        geom_beeswarm(shape = 21, col = "black", stroke = 0.1, size = 1.2, alpha = 0.8) + 
+        guides(fill = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+        labs(x = NULL, y = "Expression (logCPM)") +
+        scale_fill_brewer(palette = "Set2") +
+        theme_linedraw(9) + theme(
+            panel.grid = element_blank(),
+            axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            strip.background = element_blank(),
+            legend.key.size = unit(0.5, "lines"),
+            strip.text = element_text(color = "black", face = "bold"))
+    print(plt); cat("\n\n")
+}
+```
+
 ## Appendix
 
 ```{r}
 #| label: save-data
+#| dependson: testing
 saveRDS(res, file.path("..", "outs", "02-dge.rds"))
 ```
 
