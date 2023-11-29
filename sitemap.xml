@@ -1,15 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://HelenaLC.github.io/TLS-Silina/geo-01-quality.html</loc>
-    <lastmod>2023-05-24T10:56:02.285Z</lastmod>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-02-exploratory.html</loc>
+    <lastmod>2023-11-29T13:36:28.926Z</lastmod>
   </url>
   <url>
-    <loc>https://HelenaLC.github.io/TLS-Silina/geo-02-differential.html</loc>
-    <lastmod>2023-05-24T10:56:04.180Z</lastmod>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-01-quality.html</loc>
+    <lastmod>2023-11-29T12:56:46.258Z</lastmod>
   </url>
   <url>
-    <loc>https://HelenaLC.github.io/TLS-Silina/vis-01-quality.html</loc>
-    <lastmod>2023-05-24T10:56:08.248Z</lastmod>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-01-quality.html</loc>
+    <lastmod>2023-11-29T12:53:53.282Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-02-differential.html</loc>
+    <lastmod>2023-11-29T12:54:40.839Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-02-tls.html</loc>
+    <lastmod>2023-11-29T12:57:39.422Z</lastmod>
   </url>
 </urlset>
