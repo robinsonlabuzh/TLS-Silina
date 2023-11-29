@@ -1,23 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-02-exploratory.html</loc>
-    <lastmod>2023-11-29T13:36:28.926Z</lastmod>
-  </url>
-  <url>
-    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-01-quality.html</loc>
-    <lastmod>2023-11-29T12:56:46.258Z</lastmod>
-  </url>
-  <url>
-    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-01-quality.html</loc>
-    <lastmod>2023-11-29T12:53:53.282Z</lastmod>
-  </url>
-  <url>
-    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-02-differential.html</loc>
-    <lastmod>2023-11-29T12:54:40.839Z</lastmod>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-03-de.html</loc>
+    <lastmod>2023-11-29T15:57:22.204Z</lastmod>
   </url>
   <url>
     <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-02-tls.html</loc>
-    <lastmod>2023-11-29T12:57:39.422Z</lastmod>
+    <lastmod>2023-11-29T15:25:14.948Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-04-pseudotime_TLS.html</loc>
+    <lastmod>2023-11-29T15:22:23.959Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-02-differential.html</loc>
+    <lastmod>2023-11-29T15:20:28.611Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-01-quality.html</loc>
+    <lastmod>2023-11-29T15:19:43.990Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/geo-03-differential-two-model.html</loc>
+    <lastmod>2023-11-29T15:22:11.703Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-01-quality.html</loc>
+    <lastmod>2023-11-29T15:24:24.478Z</lastmod>
+  </url>
+  <url>
+    <loc>https://robinsonlabuzh.github.io/TLS-Silina/vis-02-exploratory.html</loc>
+    <lastmod>2023-11-29T15:55:23.003Z</lastmod>
   </url>
 </urlset>
