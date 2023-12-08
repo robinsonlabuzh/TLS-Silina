@@ -11,8 +11,12 @@ project:
     - index.qmd
     - geo-01-quality.qmd
     - geo-02-differential.qmd
+    - geo-03-differential-two-model.qmd
+    - geo-04-pseudotime_TLS.qmd
     - vis-01-quality.qmd
     - vis-02-tls.qmd
+    - vis-02-exploratory.qmd
+    - vis-03-de.qmd
 
 format:
   html:
@@ -32,7 +36,11 @@ website:
         menu:
           - file: geo-01-quality.qmd
           - file: geo-02-differential.qmd
+          - file: geo-03-differential-two-model.qmd
+          - file: geo-04-pseudotime_TLS.qmd
       - text: Visium
         menu:
           - file: vis-01-quality.qmd
           - file: vis-02-tls.qmd
+          - file: vis-02-exploratory.qmd
+          - file: vis-03-de.qmd

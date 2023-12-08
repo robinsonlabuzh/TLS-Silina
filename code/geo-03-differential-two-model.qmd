@@ -1,0 +1,584 @@
+---
+title: "Different DE models"
+---
+
+## Differential exression
+
+Compare differential expression in one model instead of separated model.
+
+## Preamble
+
+```{r}
+#| label: utils
+#| code-fold: true
+
+options(ggrepel.max.overlaps = Inf)
+
+.volcano <- function(data, name1, name2, fdr=0.1, lfc=2, one_sided=FALSE,
+                     fdr_label=fdr, lfc_label=lfc){
+  
+  data$expression = ifelse(data$FDR < fdr_label & data$logFC >= lfc_label, 'Up',
+                     ifelse(data$FDR < fdr_label & data$logFC <= -lfc_label ,'Down', 'Stable')
+                     )
+  data$gene <- rownames(data)
+  if (one_sided){
+    DEGs <- subset(data, expression =="Up")
+    xaxis <- c(0,NA)
+  }else{
+    DEGs <- subset(data, expression %in% c("Up", "Down"))
+    xaxis <- c(min(data[["logFC"]], na.rm = TRUE) - 1.5, max(data[["logFC"]], na.rm = TRUE) +
+    1.5)
+  }
+  significant <- rownames(DEGs)
+  keyvals.colour <- ifelse(data$logFC < -lfc & data$FDR < fdr, "#662965",
+                    ifelse(data$logFC > lfc & data$FDR < fdr,"gold1",
+                      ifelse(data$FDR >= fdr,"#8F8F8F","steelblue4"
+                      )))
+  names(keyvals.colour)[keyvals.colour == "#662965"] <- paste0('Up in ', name1)
+  names(keyvals.colour)[keyvals.colour == "gold1"] <- paste0('Up in ', name2)
+  names(keyvals.colour)[keyvals.colour == "steelblue4"] <- 'Low FC'
+  names(keyvals.colour)[keyvals.colour == '#8F8F8F'] <- 'NS'
+  
+  EnhancedVolcano(data,
+    x = "logFC", y = "FDR",
+    FCcutoff = lfc, pCutoff = fdr,
+    pointSize = 1, raster = TRUE,
+    title = NULL, subtitle = NULL,
+    lab = data[["gene"]], labSize = 2,
+    selectLab = rownames(DEGs),
+    xlim = xaxis,
+    ylim = c(0,NA),
+    xlab = bquote(~Log[2]~ 'FC'),
+    ylab = bquote("-"~Log[10]~ 'adj. p-val'),
+    colCustom = keyvals.colour,
+    maxoverlapsConnectors = Inf,
+    drawConnectors = TRUE, widthConnectors = 0.25) +
+  guides(col = guide_legend(override.aes = list(alpha = 1, size = 3))) +
+  theme_bw(9) +
+    theme(#aspect.ratio = 1,
+          legend.title = element_blank(),
+          legend.position = "top",
+          panel.grid.minor = element_blank())
+}
+
+```
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+#| echo: true
+#| output: false
+library(dplyr)
+library(tidyr)
+library(edgeR)
+library(ggplot2)
+library(DT)
+library(EnhancedVolcano)
+library(cowplot)
+library(SingleCellExperiment)
+library(ExploreModelMatrix)
+library(ggrepel)
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+sce <- readRDS(file.path("..", "outs", "01-sce.rds"))
+
+#sce_sub <- sce[,!sce$TissueSub %in% "LN"]
+sce_sub <- sce
+sce_sub$Origin <- sce_sub$TissueSub |> forcats::fct_collapse(
+  "parenchymal" = c("Alveoles", "Kidney", "LSCC", "RCC"))
+sce_sub$Origin <- sce_sub$Origin |> droplevels()
+sce_sub$Origin <- relevel(sce_sub$Origin, ref="parenchymal")
+
+# To compare TLS in general
+sce_sub$Origin_gen <- sce_sub$Origin |> forcats::fct_collapse(
+  "TLS" = c("E_TLS","SFL_TLS","PFL_TLS","Tcell_TLS"))
+sce_sub$Origin_gen <- sce_sub$Origin_gen |> droplevels()
+sce_sub$Origin_gen <- relevel(sce_sub$Origin_gen, ref="parenchymal")
+
+# Set up nested design matrix
+# Add a new column mixing patient and group variable
+sce_sub$PatTum <- paste0(sce_sub$PatientID, "_", sce_sub$TumorType)
+sce_sub$PatTum <- sce_sub$PatTum |> forcats::fct_collapse(
+  "1" = c("16690_LSCC", "r15660_RCC"),
+  "2" = c("17776_LSCC", "r18773_RCC"),
+  "3" = c("24136_LSCC", "r19101_RCC"),
+  "4" = c("32288_LSCC", "r24784_RCC"),
+  "5" = c("38234_LSCC", "r30616_RCC"),
+  "6" = c("39160_LSCC", "r8527_RCC"))
+
+df <- data.frame(colData(sce_sub))
+
+```
+
+```{r}
+#| include: false
+# Init Step to make sure that the js dependencies are loaded
+htmltools::tagList(datatable(df))
+```
+
+## Multilevel design Model
+
+We have an experiment with **repeated measures** (multiple measurements per Patient) and different sample locations (TLS type, parenchymal) as well as different tumor types (LSCC,RCC). To address this we fit different model:
+
+1.  a model to find **tumor specific differences between sample origins** (TLS/parenchyma etc) while accounting for patientID: `~ TumorType + PatTum:TumorType + TumorType:Origin`.
+
+2.  a model to compare **sample origins between tumor types** not accounting for PatientID (see [here](https://bioconductor.org/packages/release/bioc/vignettes/ExploreModelMatrix/inst/doc/ExploreModelMatrix.html)): `~  TumorType:Origin`.
+
+### Model1: Multilevel design model with patients
+
+#### Design
+
+```{r}
+#| label: multilevel design mod
+design1 <- model.matrix(~ TumorType + TumorType:PatTum + TumorType:Origin, df)
+design1 <- design1[,-which(colnames(design1) %in% "TumorTypeRCC:OriginLN")]
+
+
+vd <- VisualizeDesign(sampleData = df[, c( "TumorType", "Origin", "PatTum")],
+                      designMatrix = design1, 
+                      flipCoordFitted = TRUE)
+cowplot::plot_grid(plotlist = vd$plotlist, ncol = 1)
+
+# fit deseq2 GLM model
+dgl1 <- DGEList(counts(sce_sub))
+keep <- filterByExpr(dgl1, design1)
+dgl1 <- dgl1[keep, , keep.lib.sizes=FALSE]
+dgl1 <- calcNormFactors(dgl1)
+dgl1 <- estimateDisp(dgl1, design1, robust=TRUE)
+fit1 <- glmQLFit(dgl1, design1, robust=TRUE)
+
+
+```
+
+#### Contrasts
+
+```{r}
+#| label: contrast model1
+colnames(design1) <- gsub(":", "_", colnames(design1))
+
+# Define different contrasts
+contrast_mod1 <- makeContrasts(
+  ETLS_vs_par_inLSCC = TumorTypeLSCC_OriginE_TLS,
+  ETLS_vs_par_inRCC = TumorTypeRCC_OriginE_TLS,
+  SFL_TLS_vs_par_inLSCC = TumorTypeLSCC_OriginSFL_TLS,
+  SFL_TLS_vs_par_inRCC = TumorTypeRCC_OriginSFL_TLS,
+  PFL_TLS_vs_par_inLSCC = TumorTypeLSCC_OriginPFL_TLS,
+  PFL_TLS_vs_par_inRCC = TumorTypeRCC_OriginPFL_TLS,
+  Tcell_TLS_vs_par_inLSCC = TumorTypeLSCC_OriginTcell_TLS,
+  Tcell_TLS_vs_par_inRCC = TumorTypeRCC_OriginTcell_TLS,
+  ETLS_vs_SFTLS_inLSCC = TumorTypeLSCC_OriginE_TLS - TumorTypeLSCC_OriginSFL_TLS,
+  ETLS_vs_SFTLS_inRCC = TumorTypeRCC_OriginE_TLS - TumorTypeRCC_OriginSFL_TLS,
+  levels=design1)
+
+```
+
+#### DE test and results
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: de test model1
+
+res_mod1 <- list()
+
+for (. in colnames(contrast_mod1)) {
+    de <- glmQLFTest(fit1, contrast = contrast_mod1[,.])
+    tt <- topTags(de, n = Inf)$table
+    res_mod1[[.]] <- tt
+    write.csv(tt, paste0("../outs/DE/model1_", ., ".csv"))
+    dt = datatable(tt)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::
+
+#### Volcano plots
+
+::: panel-tabset
+```{r}
+#| label: volcano mod1
+#| results: asis
+
+param_list <- lapply(names(res_mod1), function(nam){
+  list("lfc_t" = 0.75, "one_sided" = TRUE, lfc_label = 1)
+})
+names(param_list) <- names(res_mod1)
+param_list[["ETLS_vs_SFTLS_inLSCC"]] <- list("lfc_t" = 0.25, 
+                                             "one_sided" = FALSE,
+                                             "lfc_label" = 0.25)
+param_list[["ETLS_vs_SFTLS_inRCC"]] <- list("lfc_t" = 0.25, 
+                                            "one_sided" = FALSE,
+                                             "lfc_label" = 0.25)
+
+for (. in names(res_mod1)) {
+    data <- res_mod1[[.]]
+    nam1 <- gsub(".*_vs_", "", x=.)
+    nam1 <- gsub("_in.*$", "", x=nam1)
+    nam2 <- gsub("_vs_.*$", "", x=.) 
+    p <- .volcano(data, name1 = nam1, name2 = nam2, 
+                  lfc = param_list[[.]][["lfc_t"]],
+                  lfc_label = param_list[[.]][["lfc_label"]],
+                  one_sided = param_list[[.]][["one_sided"]])
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+### Model2: Interaction model without patients
+
+Model to identify TLS-specific differences between tumor types (RCC vs LSCC). As patient ID and group are convoluted the patient information is skipped in this model. Instead the model considers an interaction term of the sample origin (TLS stage/parenchyma) and the tumor type.
+
+#### Design
+
+```{r}
+#| label: interaction model design
+sce_sub2 <- sce_sub[,!sce_sub$Origin %in% "LN"]
+sce_sub2$Origin <- sce_sub2$Origin |> droplevels()
+sce_sub2$Origin_gen <- sce_sub2$Origin_gen |> droplevels()
+df2 <- df |> filter(!Origin %in% "LN")
+df2$Origin <- df2$Origin |> droplevels()
+df2$Origin_gen <- df2$Origin_gen |> droplevels()
+design2 <- model.matrix(~ 0 + TumorType:Origin, df2)
+
+
+vd <- VisualizeDesign(sampleData = df2[, c( "TumorType", "Origin")],
+                      designMatrix = design2, 
+                      flipCoordFitted = TRUE)
+cowplot::plot_grid(plotlist = vd$plotlist, ncol = 1)
+
+# fit deseq2 GLM model
+dgl2 <- DGEList(counts(sce_sub2))
+keep <- filterByExpr(dgl2, design1)
+dgl2 <- dgl2[keep, , keep.lib.sizes=FALSE]
+dgl2 <- calcNormFactors(dgl2)
+dgl2 <- estimateDisp(dgl2, design2, robust=TRUE)
+fit2 <- glmQLFit(dgl2, design2, robust=TRUE)
+
+
+```
+
+#### Contrasts
+
+```{r}
+#| label: contrast model2
+colnames(design2) <- gsub(":", "_", colnames(design2))
+
+# Define different contrasts
+contrast_mod2 <- makeContrasts(
+  ETLS_inRCC_vs_LSCC = TumorTypeRCC_OriginE_TLS - TumorTypeLSCC_OriginE_TLS,
+  SFL_TLS_inRCC_vs_LSCC = TumorTypeRCC_OriginSFL_TLS - TumorTypeLSCC_OriginSFL_TLS,
+  PFL_TLS_inRCC_vs_LSCC = TumorTypeRCC_OriginPFL_TLS - TumorTypeLSCC_OriginPFL_TLS,
+  Tcell_TLS_inRCC_vs_LSCC = TumorTypeRCC_OriginTcell_TLS - TumorTypeLSCC_OriginTcell_TLS,
+  par_inRCC_vs_LSCC = TumorTypeRCC_Originparenchymal-TumorTypeLSCC_Originparenchymal,allTLS_inRCC_vs_LSCC = (TumorTypeRCC_OriginE_TLS + TumorTypeRCC_OriginSFL_TLS + TumorTypeRCC_OriginPFL_TLS + TumorTypeRCC_OriginTcell_TLS)/4 - (TumorTypeLSCC_OriginE_TLS + TumorTypeLSCC_OriginSFL_TLS + TumorTypeLSCC_OriginPFL_TLS + TumorTypeLSCC_OriginTcell_TLS)/4,
+  levels=design2)
+```
+
+#### DE test and results
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: de test model2
+
+res_mod2 <- list()
+
+for (. in colnames(contrast_mod2)) {
+    de <- glmQLFTest(fit2, contrast = contrast_mod2[,.])
+    tt <- topTags(de, n = Inf)$table
+    res_mod2[[.]] <- tt
+    dt = datatable(tt)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::
+
+#### Volcano plots
+
+::: panel-tabset
+```{r}
+#| label: volcano mod2
+#| results: asis
+
+param_list <- lapply(names(res_mod2), function(nam){
+  list("lfc_t" = 0.25, "fdr" = 0.1, "fdr_label" = 0.01, "lfc_label" = 0.5)
+})
+names(param_list) <- names(res_mod2)
+param_list[["PFL_TLS_inRCC_vs_LSCC"]] <- list("lfc_t" = 0.25, 
+                                              "fdr" = 0.1, 
+                                              "fdr_label" = 0.1, 
+                                              "lfc_label" = 0.25)
+param_list[["Tcell_TLS_inRCC_vs_LSCC"]] <- list("lfc_t" = 0.25, 
+                                                "fdr" = 0.1,
+                                                "fdr_label" = 0.05, 
+                                                "lfc_label" = 0.65)
+param_list[["par_inRCC_vs_LSCC"]] <- list("lfc_t" = 0.5, 
+                                          "fdr" = 0.1,
+                                          "fdr_label" = 0.01, 
+                                          "lfc_label" = 1.5)
+
+
+for (. in names(res_mod2)) {
+    data <- res_mod2[[.]]
+    nam1 <- "LSCC"
+    nam2 <- "RCC"
+    p <- .volcano(data, name1 = nam1, name2 = nam2, 
+                  lfc = param_list[[.]][["lfc_t"]], 
+                  fdr = param_list[[.]][["fdr"]],
+                  fdr_label = param_list[[.]][["fdr_label"]],
+                  lfc_label = param_list[[.]][["lfc_label"]],
+                  one_sided = F)
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+### LogFC compare TLS vs parenchymal
+
+```{r}
+#| label: logFC plot
+#| code-fold: true
+
+res_mod2 <- lapply(res_mod2, function(res_tab){
+  res_tab$gene <- rownames(res_tab)
+  res_tab
+})
+
+log_FC_tab <- res_mod2 |> bind_rows(.id = "contrast")
+
+# Function for signficance thresholds
+case_sig <- function(FDR1, FDR2, com1, com2, FDR_t){
+  case_when(
+  FDR1 <= FDR_t & !! FDR2 <= FDR_t ~ "both",
+  FDR1 <= FDR_t & !! FDR2 > FDR_t ~ com1,
+  FDR1 > FDR_t & !! FDR2 <= FDR_t ~ com2,
+  FDR1 > FDR_t & !! FDR2 > FDR_t ~ "none"
+)
+}
+
+## plotting function
+logFC_plot <- function(comp1, 
+                       comp2, 
+                       FDR_t = 0.1,
+                       logFC_both = 0.5){
+  # subset dataframe
+  log_FC_sub <- log_FC_tab |> 
+    dplyr::filter(contrast %in% c(comp1, comp2)) |> 
+    select(c(logFC,FDR,gene, contrast)) |> 
+    pivot_wider(names_from = contrast, 
+                values_from = c(logFC, FDR))
+  
+  # new colum names
+  logFC_comp1 <- grep(paste0("logFC_", comp1), colnames(log_FC_sub), value = T)
+  logFC_comp2 <- grep(paste0("logFC_", comp2), colnames(log_FC_sub), value = T)
+  FDR_comp1 <- grep(paste0("FDR_", comp1), colnames(log_FC_sub), value = T)
+  FDR_comp2 <- grep(paste0("FDR_", comp2), colnames(log_FC_sub), value = T)
+  
+  # Add sig threshold
+  log_FC_sub <- log_FC_sub |> 
+    mutate(sig = case_sig(FDR1 = !!sym(FDR_comp1), 
+                          FDR2 = !!sym(FDR_comp2), 
+                          com1 = comp1, 
+                          com2 = comp2, 
+                          FDR_t = FDR_t))
+  
+  # Add to res list
+  res_nam <- paste0(comp1, "_", comp2)
+  
+  # Add genes to highlight
+  log_FC_sub <- log_FC_sub |> mutate(
+    highlight = case_when(
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        abs(!!sym(logFC_comp1)) > logFC_both ~ gene,
+      .default = ""
+      )
+    ) 
+  # plot limits
+  max_lim1 <- max(abs(min(log_FC_sub[,logFC_comp1])), 
+                  max(log_FC_sub[,logFC_comp1]))
+  max_lim2 <- max(abs(min(log_FC_sub[,logFC_comp2])), 
+                  max(log_FC_sub[,logFC_comp2]))
+  
+  # colors
+  color_pal <- c("grey","#fdb462", "#ff6666","#0099cc")
+  names(color_pal) <- c("none", "both", comp1, comp2)
+  
+  # plot
+  p <- ggplot(log_FC_sub, aes_string(x=logFC_comp1, 
+                       y=logFC_comp2)) + 
+    geom_point(aes(colour = sig), size = 0.9, alpha = 0.7) +
+    xlim(-max_lim1, max_lim1) +
+    ylim(-max_lim2, max_lim2) +
+    geom_vline(xintercept = 0) +
+    geom_hline(yintercept = 0) + 
+    scale_color_manual(values = color_pal) + 
+    theme_bw()
+  
+  # annotations
+  p + geom_text_repel(
+    aes(label = highlight),
+    family = "Poppins",
+    size = 2,
+    min.segment.length = 0, 
+    seed = 42, 
+    box.padding = 0.5,
+    max.overlaps = Inf,
+    arrow = arrow(length = unit(0.005, "npc")),
+    nudge_x = .15,
+    nudge_y = .5,
+    color = "#3D3D3D"
+  )
+}
+
+
+```
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: plot scatter
+
+comp1_list <- colnames(contrast_mod2)[!colnames(contrast_mod2) %in% c("par_inRCC_vs_LSCC")]
+param_list <- lapply(comp1_list, function(nam){
+  list("lfc_both" = 0.5)
+})
+names(param_list) <- comp1_list
+param_list[["Tcell_TLS_inRCC_vs_LSCC"]] <- list("lfc_both" = 0.75)
+
+for (. in comp1_list) {
+    lfc_both = param_list[[.]][["lfc_both"]]
+    p <- logFC_plot(., "par_inRCC_vs_LSCC", logFC_both = lfc_both)
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+### Select DE genes
+
+To select TLS-specific DE genes specific to each tumor type we use results from model2. Results are then filtered for genes that are also significant in the parenchymal comparison of the tumor (excluded), if the genes were not shown to be specific to TLS maturation by showing significant differences in model1 comparisons (both_TLS). Genes only significant in the non parenchymal comparison of model2 (sig_TLS) and those significant in the TLS-spcific and parenchymal comparison of the tumor showing an opposite effect (opposite) were selected.
+
+```{r}
+#| label: sel
+#| code-fold: true
+
+sel_TLS <- function(res, pat, fdr){
+  pat_nam <- grep(pat, names(res), value = T)
+  pat_nam <- grep("par", pat_nam, value = T)
+  sub_res <- lapply(pat_nam, function(nam){
+    res_sel <- res[[nam]] |> filter(logFC > 0 & FDR < fdr)
+    res_sel$gene <- rownames(res_sel)
+    data.frame(res_sel)
+  }) |> bind_rows(.id = "comp")
+}
+
+TLS_RCC <- sel_TLS(res_mod1, "RCC", fdr = 0.05)
+TLS_RCC_gene <- unique(TLS_RCC$gene)
+write.csv(TLS_RCC_gene, paste0("../outs/TLS_RCC_genes.csv"))
+
+TLS_LSCC <- sel_TLS(res_mod1, "LSCC", fdr = 0.05)
+TLS_LSCC_gene <- unique(TLS_LSCC$gene)
+write.csv(TLS_LSCC_gene, paste0("../outs/TLS_LSCC_genes.csv"))
+
+# General exclusion list
+# Genes sig DE in parenchymal comparison, but not sig in tumor-specific TLS maturation
+par_res <- res_mod2[["par_inRCC_vs_LSCC"]] |> 
+  filter(FDR < 0.05) |> 
+  data.frame()
+par_res$gene <- rownames(par_res)
+
+exclude <- par_res[!par_res$gene %in% c(TLS_RCC_gene, TLS_LSCC_gene),]
+write.csv(exclude, paste0("../outs/excluded_parenchymal_genes.csv"))
+
+sel_genes <- function(comp1, 
+                       comp2, 
+                       FDR_t = 0.1){
+  log_FC_sub <- log_FC_tab |> 
+    dplyr::filter(contrast %in% c(comp1, comp2)) |> 
+    select(c(logFC,FDR,gene, F,contrast)) |> 
+    pivot_wider(names_from = contrast, 
+                values_from = c(logFC, FDR, F))
+  
+   # new colum names
+  logFC_comp1 <- grep(paste0("logFC_", comp1), colnames(log_FC_sub), value = T)
+  logFC_comp2 <- grep(paste0("logFC_", comp2), colnames(log_FC_sub), value = T)
+  FDR_comp1 <- grep(paste0("FDR_", comp1), colnames(log_FC_sub), value = T)
+  FDR_comp2 <- grep(paste0("FDR_", comp2), colnames(log_FC_sub), value = T)
+  
+  # Add sig threshold
+  log_FC_sub <- log_FC_sub |> 
+    mutate(sig = case_sig(FDR1 = !!sym(FDR_comp1), 
+                          FDR2 = !!sym(FDR_comp2), 
+                          com1 = comp1, 
+                          com2 = comp2, 
+                          FDR_t = FDR_t))
+  
+  
+   # Genes to exclude
+  log_FC_sub <- log_FC_sub |> mutate(
+    selected = case_when(
+      # exclude all sig in both & same sign & not in TLS list
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        !gene %in% c(TLS_LSCC_gene, TLS_RCC_gene) ~ "exclude",
+      # include sig in both & same sign & in TLS list
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        gene %in% c(TLS_LSCC_gene, TLS_RCC_gene) ~ "both_TLS",
+      # sig all sig in TLS only
+      sig %in% comp1 ~ "sig_TLS",
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) != sign(!!sym(logFC_comp2)) ~ "opposite",
+      .default = "none"
+      )
+    )
+  par_nam <- grep("_par_", colnames(log_FC_sub))
+  log_FC_sub <- log_FC_sub |> select(-par_nam)
+  }
+
+```
+
+#### Selected results
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: sel tab
+
+for (. in comp1_list) {
+    tab_sel <- sel_genes(., "par_inRCC_vs_LSCC")
+    write.csv(tab_sel, paste0("../outs/DE/model2_", ., ".csv"))
+    tab_fil <- tab_sel |> filter(selected %in% c("sig_TLS", "opposite", "both_TLS"))
+    dt = datatable(tab_fil)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::
+
+#### Summaries
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: summaries
+
+for (. in comp1_list) {
+    tab_sel <- sel_genes(., "par_inRCC_vs_LSCC")
+    df <- data.frame(table(tab_sel$selected))
+    colnames(df) <- c("status", "n")
+    dt = datatable(df)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::

@@ -1,0 +1,149 @@
+---
+title: "Pseudotime sample"
+---
+
+# Pseudotime
+
+## Preamble
+
+### Dependencies
+
+```{r}
+#| label: load-libs
+#| echo: true
+#| output: false
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scran)
+library(scuttle)
+library(scater)
+library(TSCAN)
+library(ggbeeswarm)
+library(ggthemes)
+library(SingleCellExperiment)
+library(ExploreModelMatrix)
+```
+
+### Loading
+
+```{r}
+#| label: load-data
+sce <- readRDS(file.path("..", "outs", "01-sce.rds"))
+
+```
+
+## Analysis
+
+```{r}
+#| label: subset
+# select TLS only
+sce_sub <- sce[, sce$TissueType %in% c("TLS")]
+
+# select hvg independent of patient effects for TLS only
+tbl <- modelGeneVar(sce, block = sce$patientID)
+hvg <- tbl$bio > 0
+
+# calculate lowerd dims
+sce_sub <- runPCA(sce_sub, subset_row = hvg)
+sce_sub <- runTSNE(sce_sub)
+sce_sub <- runUMAP(sce_sub)
+```
+
+```{r}
+#| label: pseudotime
+# TSCAN's minmum spanning tree
+sce_sub$broad_label <-sce_sub$TissueSub |> 
+  forcats::fct_collapse("early" = c("E_TLS", "Tcell_TLS"),
+                        "late" = c("SFL_TLS", "PFL_TLS"))
+
+by.cluster <- aggregateAcrossCells(sce_sub, ids=sce_sub$broad_label)
+centroids <- reducedDim(by.cluster, "PCA")
+mst <- TSCAN::createClusterMST(centroids, clusters=NULL)
+mst
+```
+
+```{r}
+#| label: plot_mst
+# TSCAN's minmum spanning tree in TSNE
+
+line.data <- reportEdges(by.cluster, mst=mst, clusters=NULL, use.dimred="TSNE")
+
+plotPCA(sce_sub, colour_by="TissueSub") + 
+    geom_line(data=line.data, mapping=aes(x=TSNE1, y=TSNE2, group=edge))
+```
+
+```{r}
+#| label: pseudotime_ordering
+# Get a pseudotime orddering
+map.tscan <- mapCellsToEdges(sce_sub, 
+                             mst=mst, 
+                             use.dimred="PCA", 
+                             clusters = sce_sub$broad_label)
+tscan.pseudo <- orderCells(map.tscan, mst, start = "early")
+
+common.pseudo <- averagePseudotime(tscan.pseudo)
+sce_sub$pseudotime <- common.pseudo
+plotTSNE(sce_sub, colour_by=I(common.pseudo), 
+        text_by="TissueSub", text_colour="red") +
+    geom_line(data=line.data, mapping=aes(x=TSNE1, y=TSNE2, group=edge))
+
+```
+
+### Plots for pseudotime ordering
+
+#### By TumorType
+
+```{r}
+#| label: one_dim pseudo tumor
+# One dimensional ordering by pseudotime
+
+## pseudotime rank
+sce_sub$pseudotime_rank <- rank(sce_sub$pseudotime)
+
+ggplot(as.data.frame(colData(sce_sub)), aes(x = pseudotime, y = TumorType, 
+                                             colour = TissueSub)) +
+    geom_quasirandom(groupOnX = FALSE) +
+    scale_color_tableau() + theme_bw() +
+    xlab("pseudotime") + ylab("Tumor type") +
+    ggtitle("Cells ordered by pseudotime")
+
+
+```
+
+#### By TissueSub
+
+```{r fig.width=7, fig.height=6}
+#| label: one_dim pseudo tissue
+# One dimensional ordering by pseudotime
+
+ggplot(as.data.frame(colData(sce_sub)), aes(x = pseudotime, y = TissueSub, 
+                                             colour = TissueSub)) +
+    geom_quasirandom(orientation = "y") +
+    scale_color_tableau() + theme_bw() +
+    xlab("pseudotime") + ylab("Differentiation status") +
+    ggtitle("Cells ordered by pseudotime") + 
+      facet_wrap(~TumorType, ncol = 1)
+
+
+```
+
+#### By TissueSub and TumorType
+
+```{r, fig.height=5, fig.width=6}
+#| label: one_dim pseudo tissue tumor
+# One dimensional ordering by pseudotime
+
+ggplot(as.data.frame(colData(sce_sub)), 
+       aes(x = pseudotime, 
+           y = interaction(TumorType, TissueSub),
+           colour = interaction(TumorType, TissueSub),
+           group = interaction(TissueSub, TumorType))) +
+    geom_quasirandom(orientation = "y") +
+    scale_color_brewer(palette="Paired") +
+    #scale_color_tableau(palette = "Tableau 20") + 
+    theme_bw() +
+    theme(legend.position = "none") +
+    xlab("pseudotime") + ylab("Differentiation status") +
+    ggtitle("Cells ordered by pseudotime")
+```

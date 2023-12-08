@@ -1,0 +1,1010 @@
+---
+title: "Differential"
+---
+
+## TLS DE analysis
+
+### Preamble
+
+```{r}
+#| label: utils
+#| code-fold: true
+
+options(ggrepel.max.overlaps = Inf)
+
+.volcano <- function(data, name1, name2, fdr=0.1, lfc=2, one_sided=FALSE,
+                     fdr_label=fdr, lfc_label=lfc){
+  
+  data$expression = ifelse(data$FDR < fdr_label & data$logFC >= lfc_label, 'Up',
+                     ifelse(data$FDR < fdr_label & data$logFC <= -lfc_label ,'Down', 'Stable')
+                     )
+  data$gene <- rownames(data)
+  if (one_sided){
+    DEGs <- subset(data, expression =="Up")
+    xaxis <- c(0,NA)
+    yaxis <- c(0, 
+               max(data[["FDR"]], na.rm = TRUE) + 1.5)
+  }else{
+    DEGs <- subset(data, expression %in% c("Up", "Down"))
+    xaxis <- c(min(data[["logFC"]], na.rm = TRUE) - 1.5, 
+               max(data[["logFC"]], na.rm = TRUE) + 1.5)
+    yaxis <- c(0,NA)
+  }
+  significant <- rownames(DEGs)
+  keyvals.colour <- ifelse(data$logFC < -lfc & data$FDR < fdr, "#662965",
+                    ifelse(data$logFC > lfc & data$FDR < fdr,"gold1",
+                      ifelse(data$FDR >= fdr,"#8F8F8F","steelblue4"
+                      )))
+  names(keyvals.colour)[keyvals.colour == "#662965"] <- paste0('Up in ', name1)
+  names(keyvals.colour)[keyvals.colour == "gold1"] <- paste0('Up in ', name2)
+  names(keyvals.colour)[keyvals.colour == "steelblue4"] <- 'Low FC'
+  names(keyvals.colour)[keyvals.colour == '#8F8F8F'] <- 'NS'
+  
+  EnhancedVolcano(data,
+    x = "logFC", y = "FDR",
+    FCcutoff = lfc, pCutoff = fdr,
+    pointSize = 1, raster = TRUE,
+    title = NULL, subtitle = NULL,
+    lab = data[["gene"]], labSize = 2,
+    selectLab = rownames(DEGs),
+    xlim = xaxis,
+    ylim = yaxis,
+    xlab = bquote(~Log[2]~ 'FC'),
+    ylab = bquote("-"~Log[10]~ 'adj. p-val'),
+    colCustom = keyvals.colour,
+    maxoverlapsConnectors = Inf,
+    drawConnectors = TRUE, widthConnectors = 0.25) +
+  guides(col = guide_legend(override.aes = list(alpha = 1, size = 3))) +
+  theme_bw(9) +
+    theme(#aspect.ratio = 1,
+          legend.title = element_blank(),
+          legend.position = "top",
+          panel.grid.minor = element_blank())
+}
+
+```
+
+
+```{r}
+#| label: load-libs
+#| message: false
+library(dplyr)
+library(tidyr)
+library(edgeR)
+library(ggplot2)
+library(DT)
+library(UpSetR)
+library(EnhancedVolcano)
+library(patchwork)
+library(cowplot)
+library(SingleCellExperiment)
+library(ExploreModelMatrix)
+library(scater)
+library(ggrepel)
+
+```
+
+### Data
+
+```{r}
+#| label: data
+
+spe <- readRDS("../outs/01-spe.rds")
+
+# filter spots with at least 200 detected features overall
+spe <- spe[, colSums(counts(spe) > 0) >= 200]
+
+# filter pat that is not part of the GEOMX data
+spe <- spe[,!spe$sample_id %in% "B07_38596"]
+spe$sample_id <- as.character(spe$sample_id)
+spe$sample_id[spe$sample_id %in% "B06_24137"] <- "B06_24136"
+spe$sample_id <- as.factor(spe$sample_id)
+
+spe$anno2 <- as.character(spe$anno2)
+spe$anno2 <- gsub("24137", "24136", spe$anno2)
+spe$anno2 <- as.factor(spe$anno2)
+
+nan <- is.na(spe$anno2)
+spe <- spe[, !nan]
+spe$anno2 <- spe$anno2 |> forcats::fct_collapse(
+  "parenchymal" = c("NOR", "TUM"))
+spe$anno3 <- spe$anno2
+spe$anno3 <- as.character(spe$anno3)
+spe$anno3[grep(".*MTLS", spe$anno3)] <- "MTLS"
+spe$anno3[grep(".*ETLS", spe$anno3)] <- "ETLS"
+
+# Filter spots by type
+spe <- spe[,!spe$TumorType %in% "LUAD"]
+spe <- spe[,!spe$anno1 %in% c("EXCL", "LN", "INFL")]
+
+#Remove non matching anno
+spe <- spe[,!spe$anno2 %in% c("INFL", "24784_ETLS57", "EXCL")]
+
+spe$anno3 <- as.factor(spe$anno3)
+spe$anno3 <- droplevels(spe$anno3)
+spe$anno2 <- droplevels(spe$anno2)
+spe$anno1 <- droplevels(spe$anno1)
+spe$TumorType <- droplevels(spe$TumorType)
+spe$anno3 <- relevel(spe$anno3, ref= "parenchymal")
+
+
+
+spe$anno4 <- as.character(spe$anno2)
+
+spe$anno4[grep("parenchymal", spe$anno4)] <- paste0(spe$sample_id[grep("parenchymal", spe$anno4)], "_parenchymal")
+
+spe$PatTum <- paste0(spe$sample_id, "_", spe$TumorType)
+spe$PatTum <- spe$PatTum |> forcats::fct_collapse(
+  "1" = c("B04_17776_LSCC", "B05_8527_ccRCC"),
+  "2" = c("B05_32288_LSCC", "B06_24784_ccRCC"),
+  "3" = c("B06_24136_LSCC", "B07_30616_ccRCC"))
+
+# keep features detected in at least 20 spots in any sample
+idx <- split(seq(ncol(spe)), spe$sample_id)
+gs <- sapply(idx, \(.) {
+    y <- counts(spe[, .]) > 3
+    rowSums(y) >= 20
+})
+spe <- spe[rowAnys(gs), ]
+
+# genes expressed in TLS after filtering
+idx <- split(seq(ncol(spe)), spe$anno3)
+gs_type <- sapply(idx, \(.) {
+    y <- counts(spe[, .]) > 3
+    rowSums(y) >= 1
+})
+
+colSums(gs_type)
+```
+
+
+```{r}
+#| include: false
+# Init Step to make sure that the js dependencies are loaded
+htmltools::tagList(datatable(as.data.frame(colData(spe))))
+```
+
+
+### DE analysis model 1
+
+Model1: DE associated with maturation
+
+```{r}
+#| label: DE analysis
+
+# Generate pseudo bulk object
+pbs <- aggregateAcrossCells(spe, ids=spe$anno4)
+
+design1 <- model.matrix(~ TumorType + TumorType:PatTum + TumorType:anno3, colData(pbs))
+#design1 <- design1[,!colnames(design1) %in% "TumorTypeccRCC:PatTum4"]
+
+#Fit model
+dgl1 <- DGEList(counts(pbs))
+keep <- filterByExpr(dgl1, design1)
+#dgl1 <- dgl1[keep, , keep.lib.sizes=FALSE]
+dgl1 <- calcNormFactors(dgl1)
+dgl1 <- estimateDisp(dgl1, design1, robust=TRUE)
+fit1 <- glmQLFit(dgl1, design1, robust=TRUE)
+```
+
+
+
+```{r}
+#| label: contrast
+
+colnames(design1) <- gsub(":", "_", colnames(design1))
+
+# Define different contrasts
+contrast_mod1 <- makeContrasts(
+  ETLS_vs_par_inLSCC = TumorTypeLSCC_anno3ETLS,
+  ETLS_vs_par_inRCC = TumorTypeccRCC_anno3ETLS,
+  SFL_TLS_vs_par_inLSCC = TumorTypeLSCC_anno3MTLS,
+  SFL_TLS_vs_par_inRCC = TumorTypeccRCC_anno3MTLS,
+  ETLS_vs_SFTLS_inLSCC = TumorTypeLSCC_anno3ETLS - TumorTypeLSCC_anno3MTLS,
+  ETLS_vs_SFTLS_inRCC = TumorTypeccRCC_anno3ETLS - TumorTypeccRCC_anno3MTLS,
+  levels=design1)
+```
+
+### DE results model 1
+::: panel-tabset
+
+```{r}
+#| results: asis
+#| label: de test model1
+
+int_names <- c("logFC", "F", "FDR")
+
+res_mod1 <- list()
+
+for (. in colnames(contrast_mod1)) {
+    de <- glmQLFTest(fit1, contrast = contrast_mod1[,.])
+    tt <- topTags(de, n = Inf)$table
+    res_mod1[[.]] <- tt
+    write.csv(tt, paste0("../outs/DE/vis/model1_", ., ".csv"))
+    tt_dat <- topTags(de, n = 500)$table[,int_names]
+    dt = datatable(tt_dat)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::
+
+
+#### Volcano plots
+
+::: panel-tabset
+
+```{r}
+#| label: volcano mod1
+#| results: asis
+
+param_list <- lapply(names(res_mod1), function(nam){
+  list("lfc_t" = 0.5, "one_sided" = TRUE, lfc_label = 1)
+})
+names(param_list) <- names(res_mod1)
+param_list[["ETLS_vs_SFTLS_inLSCC"]] <- list("lfc_t" = 0.25, 
+                                             "one_sided" = FALSE,
+                                             "lfc_label" = 0.25)
+param_list[["ETLS_vs_SFTLS_inRCC"]] <- list("lfc_t" = 0.25, 
+                                            "one_sided" = FALSE,
+                                             "lfc_label" = 0.25)
+
+for (. in names(res_mod1)) {
+    data <- res_mod1[[.]]
+    nam1 <- gsub(".*_vs_", "", x=.)
+    nam1 <- gsub("_in.*$", "", x=nam1)
+    nam2 <- gsub("_vs_.*$", "", x=.) 
+    p <- .volcano(data, name1 = nam1, name2 = nam2, 
+                  lfc = param_list[[.]][["lfc_t"]],
+                  lfc_label = param_list[[.]][["lfc_label"]],
+                  one_sided = param_list[[.]][["one_sided"]])
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+
+:::
+
+### Model2: Interaction model without patients
+
+```{r}
+#| label: interaction model design
+#| 
+design2 <- model.matrix(~ 0 + TumorType:anno3, colData(pbs))
+
+
+# fit deseq2 GLM model
+dgl2 <- DGEList(counts(pbs))
+keep <- filterByExpr(dgl2, design2)
+#dgl2 <- dgl2[keep, , keep.lib.sizes=FALSE]
+dgl2 <- calcNormFactors(dgl2)
+dgl2 <- estimateDisp(dgl2, design2, robust=TRUE)
+fit2 <- glmQLFit(dgl2, design2, robust=TRUE)
+
+```
+
+
+```{r}
+#| label: contrast model2
+colnames(design2) <- gsub(":", "_", colnames(design2))
+
+# Define different contrasts
+contrast_mod2 <- makeContrasts(
+  ETLS_inRCC_vs_LSCC = TumorTypeccRCC_anno3ETLS - TumorTypeLSCC_anno3ETLS,
+  SFL_TLS_inRCC_vs_LSCC = TumorTypeccRCC_anno3MTLS - TumorTypeLSCC_anno3MTLS,
+  par_inRCC_vs_LSCC = TumorTypeccRCC_anno3parenchymal -TumorTypeLSCC_anno3parenchymal,
+  allTLS_inRCC_vs_LSCC = (TumorTypeccRCC_anno3ETLS + TumorTypeccRCC_anno3MTLS)/2 - (TumorTypeLSCC_anno3ETLS + TumorTypeLSCC_anno3MTLS)/2,
+  levels=design2)
+
+```
+
+#### DE tab model2
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: de test model2
+
+res_mod2 <- list()
+
+for (. in colnames(contrast_mod2)) {
+    de <- glmQLFTest(fit2, contrast = contrast_mod2[,.])
+    tt <- topTags(de, n = Inf)$table
+    res_mod2[[.]] <- tt
+    write.csv(tt, paste0("../outs/DE/vis/model2_", ., ".csv"))
+    tt_dat <- topTags(de, n = 500)$table[, int_names]
+    dt = datatable(tt_dat)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+```
+
+:::
+
+#### Volcano plots
+
+::: panel-tabset
+
+```{r}
+#| label: volcano mod2
+#| results: asis
+
+param_list <- lapply(names(res_mod2), function(nam){
+  list("lfc_t" = 0.25, "fdr" = 0.1, "fdr_label" = 0.01, "lfc_label" = 3)
+})
+names(param_list) <- names(res_mod2)
+param_list[["par_inRCC_vs_LSCC"]] <- list("lfc_t" = 0.5, 
+                                          "fdr" = 0.1,
+                                          "fdr_label" = 0.01, 
+                                          "lfc_label" = 3)
+
+param_list[["allTLS_inRCC_vs_LSCC"]] <- list("lfc_t" = 1, 
+                                          "fdr" = 0.1,
+                                          "fdr_label" = 0.01, 
+                                          "lfc_label" = 3)
+
+param_list[["ETLS_inRCC_vs_LSCC"]] <- list("lfc_t" = 1, 
+                                          "fdr" = 0.1,
+                                          "fdr_label" = 0.01, 
+                                          "lfc_label" = 3)
+
+
+for (. in names(res_mod2)) {
+    data <- res_mod2[[.]]
+    nam1 <- "LSCC"
+    nam2 <- "RCC"
+    p <- .volcano(data, name1 = nam1, name2 = nam2, 
+                  lfc = param_list[[.]][["lfc_t"]], 
+                  fdr = param_list[[.]][["fdr"]],
+                  fdr_label = param_list[[.]][["fdr_label"]],
+                  lfc_label = param_list[[.]][["lfc_label"]],
+                  one_sided = F)
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+
+### LogFC compare TLS vs parenchymal
+
+```{r}
+#| label: logFC plot
+#| code-fold: true
+
+res_mod2 <- lapply(res_mod2, function(res_tab){
+  res_tab$gene <- rownames(res_tab)
+  res_tab
+})
+
+log_FC_tab <- res_mod2 |> bind_rows(.id = "contrast")
+
+# Function for signficance thresholds
+case_sig <- function(FDR1, FDR2, com1, com2, FDR_t){
+  case_when(
+  FDR1 <= FDR_t & !! FDR2 <= FDR_t ~ "both",
+  FDR1 <= FDR_t & !! FDR2 > FDR_t ~ com1,
+  FDR1 > FDR_t & !! FDR2 <= FDR_t ~ com2,
+  FDR1 > FDR_t & !! FDR2 > FDR_t ~ "none"
+)
+}
+
+## plotting function
+logFC_plot <- function(comp1, 
+                       comp2, 
+                       FDR_t = 0.1,
+                       logFC_both = 0.5){
+  # subset dataframe
+  log_FC_sub <- log_FC_tab |> 
+    dplyr::filter(contrast %in% c(comp1, comp2)) |> 
+    select(c(logFC,FDR,gene, contrast)) |> 
+    pivot_wider(names_from = contrast, 
+                values_from = c(logFC, FDR))
+  
+  # new colum names
+  logFC_comp1 <- grep(paste0("logFC_", comp1), colnames(log_FC_sub), value = T)
+  logFC_comp2 <- grep(paste0("logFC_", comp2), colnames(log_FC_sub), value = T)
+  FDR_comp1 <- grep(paste0("FDR_", comp1), colnames(log_FC_sub), value = T)
+  FDR_comp2 <- grep(paste0("FDR_", comp2), colnames(log_FC_sub), value = T)
+  
+  # Add sig threshold
+  log_FC_sub <- log_FC_sub |> 
+    mutate(sig = case_sig(FDR1 = !!sym(FDR_comp1), 
+                          FDR2 = !!sym(FDR_comp2), 
+                          com1 = comp1, 
+                          com2 = comp2, 
+                          FDR_t = FDR_t))
+  
+  # Add to res list
+  res_nam <- paste0(comp1, "_", comp2)
+  
+  # Add genes to highlight
+  log_FC_sub <- log_FC_sub |> mutate(
+    highlight = case_when(
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        abs(!!sym(logFC_comp1)) > logFC_both ~ gene,
+      .default = ""
+      )
+    ) 
+  # plot limits
+  max_lim1 <- max(abs(min(log_FC_sub[,logFC_comp1])), 
+                  max(log_FC_sub[,logFC_comp1]))
+  max_lim2 <- max(abs(min(log_FC_sub[,logFC_comp2])), 
+                  max(log_FC_sub[,logFC_comp2]))
+  
+  # colors
+  color_pal <- c("grey","#fdb462", "#ff6666","#0099cc")
+  names(color_pal) <- c("none", "both", comp1, comp2)
+  
+  # plot
+  p <- ggplot(log_FC_sub, aes_string(x=logFC_comp1, 
+                       y=logFC_comp2)) + 
+    geom_point(aes(colour = sig), size = 0.9, alpha = 0.7) +
+    xlim(-max_lim1, max_lim1) +
+    ylim(-max_lim2, max_lim2) +
+    geom_vline(xintercept = 0) +
+    geom_hline(yintercept = 0) + 
+    scale_color_manual(values = color_pal) + 
+    theme_bw()
+  
+  # annotations
+  p + geom_text_repel(
+    aes(label = highlight),
+    family = "Poppins",
+    size = 2,
+    min.segment.length = 0, 
+    seed = 42, 
+    box.padding = 0.5,
+    max.overlaps = Inf,
+    arrow = arrow(length = unit(0.005, "npc")),
+    nudge_x = .15,
+    nudge_y = .5,
+    color = "#3D3D3D"
+  )
+}
+
+
+```
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: plot scatter
+
+comp1_list <- colnames(contrast_mod2)[!colnames(contrast_mod2) %in% c("par_inRCC_vs_LSCC")]
+param_list <- lapply(comp1_list, function(nam){
+  list("lfc_both" = 3)
+})
+names(param_list) <- comp1_list
+param_list[["Tcell_TLS_inRCC_vs_LSCC"]] <- list("lfc_both" = 3)
+
+for (. in comp1_list) {
+    lfc_both = param_list[[.]][["lfc_both"]]
+    p <- logFC_plot(., "par_inRCC_vs_LSCC", logFC_both = lfc_both)
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+### Select DE genes
+
+To select TLS-specific DE genes specific to each tumor type we use results from model2. Results are then filtered for genes that are also significant in the parenchymal comparison of the tumor (excluded), if the genes were not shown to be specific to TLS maturation by showing significant differences in model1 comparisons (both_TLS). Genes only significant in the non parenchymal comparison of model2 (sig_TLS) and those significant in the TLS-spcific and parenchymal comparison of the tumor showing an opposite effect (opposite) were selected.
+
+```{r}
+#| label: sel
+#| code-fold: true
+
+sel_TLS <- function(res, pat, fdr){
+  pat_nam <- grep(pat, names(res), value = T)
+  pat_nam <- grep("par", pat_nam, value = T)
+  sub_res <- lapply(pat_nam, function(nam){
+    res_sel <- res[[nam]] |> filter(logFC > 0 & FDR < fdr)
+    res_sel$gene <- rownames(res_sel)
+    data.frame(res_sel)
+  }) |> bind_rows(.id = "comp")
+}
+
+TLS_RCC <- sel_TLS(res_mod1, "RCC", fdr = 0.05)
+TLS_RCC_gene <- unique(TLS_RCC$gene)
+write.csv(TLS_RCC_gene, paste0("../outs/TLS_RCC_genes_vis.csv"))
+
+TLS_LSCC <- sel_TLS(res_mod1, "LSCC", fdr = 0.05)
+TLS_LSCC_gene <- unique(TLS_LSCC$gene)
+write.csv(TLS_LSCC_gene, paste0("../outs/TLS_LSCC_genes_vis.csv"))
+
+# General exclusion list
+# Genes sig DE in parenchymal comparison, but not sig in tumor-specific TLS maturation
+par_res <- res_mod2[["par_inRCC_vs_LSCC"]] |> 
+  filter(FDR < 0.05) |> 
+  data.frame()
+par_res$gene <- rownames(par_res)
+
+exclude <- par_res[!par_res$gene %in% c(TLS_RCC_gene, TLS_LSCC_gene),]
+write.csv(exclude, paste0("../outs/excluded_parenchymal_genes_vis.csv"))
+
+sel_genes <- function(comp1, 
+                       comp2, 
+                       FDR_t = 0.1){
+  log_FC_sub <- log_FC_tab |> 
+    dplyr::filter(contrast %in% c(comp1, comp2)) |> 
+    select(c(logFC,FDR,gene, F,contrast)) |> 
+    pivot_wider(names_from = contrast, 
+                values_from = c(logFC, FDR, F))
+  
+   # new colum names
+  logFC_comp1 <- grep(paste0("logFC_", comp1), colnames(log_FC_sub), value = T)
+  logFC_comp2 <- grep(paste0("logFC_", comp2), colnames(log_FC_sub), value = T)
+  FDR_comp1 <- grep(paste0("FDR_", comp1), colnames(log_FC_sub), value = T)
+  FDR_comp2 <- grep(paste0("FDR_", comp2), colnames(log_FC_sub), value = T)
+  
+  # Add sig threshold
+  log_FC_sub <- log_FC_sub |> 
+    mutate(sig = case_sig(FDR1 = !!sym(FDR_comp1), 
+                          FDR2 = !!sym(FDR_comp2), 
+                          com1 = comp1, 
+                          com2 = comp2, 
+                          FDR_t = FDR_t))
+  
+  
+   # Genes to exclude
+  log_FC_sub <- log_FC_sub |> mutate(
+    selected = case_when(
+      # exclude all sig in both & same sign & not in TLS list
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        !gene %in% c(TLS_LSCC_gene, TLS_RCC_gene) ~ "exclude",
+      # include sig in both & same sign & in TLS list
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) &
+        gene %in% c(TLS_LSCC_gene, TLS_RCC_gene) ~ "both_TLS",
+      # sig all sig in TLS only
+      sig %in% comp1 ~ "sig_TLS",
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) != sign(!!sym(logFC_comp2)) ~ "opposite",
+      .default = "none"
+      )
+    )
+  par_nam <- grep("_par_", colnames(log_FC_sub))
+  log_FC_sub <- log_FC_sub |> select(-par_nam)
+  }
+
+```
+
+#### Selected results
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: sel tab
+
+res_model2_sel <- list()
+
+for (. in comp1_list) {
+    tab_sel <- sel_genes(., "par_inRCC_vs_LSCC")
+    write.csv(tab_sel, paste0("../outs/DE/vis/model2_", ., ".csv"))
+    res_model2_sel[[.]] <- tab_sel
+    tab_fil <- tab_sel |> filter(selected %in% c("sig_TLS", "opposite", "both_TLS"))
+    dt = datatable(tab_fil)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+:::
+
+
+### Compare results GEO/VIS
+
+```{r}
+#| label: comp GEO
+
+# DE objects
+filenames <- list.files("../outs/DE", pattern="*.csv", full.names=TRUE)
+filenam <- list.files("../outs/DE", pattern="*.csv", full.names=FALSE)
+filenam <- gsub(".csv$", "", filenam)
+de_list <- lapply(filenames, read.csv)
+names(de_list) <- filenam
+
+
+# subset res to de-genes
+de_gen_list <- lapply(de_list, function(.){
+  if(! "gene" %in% colnames(.)){
+      .$gene <- .$X
+  }
+  .
+}) 
+
+mod1_names <- grep("model1_", names(de_gen_list), value = T)
+mod2_names <- grep("model2_", names(de_gen_list), value = T)
+
+
+geo_mod1 <- de_gen_list[mod1_names]
+geo_mod2 <- de_gen_list[mod2_names]
+
+names(geo_mod1) <- gsub("model1_", "", names(geo_mod1))
+names(geo_mod2) <- gsub("model2_", "", names(geo_mod2))
+
+```
+
+
+### FC compare
+```{r}
+#| label: logFC plot compare
+#| code-fold: true
+
+res_mod2 <- lapply(res_mod2, function(res_tab){
+  res_tab$gene <- rownames(res_tab)
+  res_tab
+})
+
+res_mod1 <- lapply(res_mod1, function(res_tab){
+  res_tab$gene <- rownames(res_tab)
+  res_tab
+})
+
+case_sig <- function(FDR1, FDR2, com1, com2, FDR_t){
+  case_when(
+  FDR1 <= FDR_t & !! FDR2 <= FDR_t ~ "both",
+  FDR1 <= FDR_t & !! FDR2 > FDR_t ~ com1,
+  FDR1 > FDR_t & !! FDR2 <= FDR_t ~ com2,
+  FDR1 > FDR_t & !! FDR2 > FDR_t ~ "none"
+)
+}
+
+
+## plotting function
+logFC_plot <- function(log_FC_tab,
+                       comp1, 
+                       comp2, 
+                       FDR_t = 0.1,
+                       logFC_both = 0.5){
+  # subset dataframe
+  log_FC_sub <- log_FC_tab |> 
+    select(c(logFC,FDR,gene, tech)) |> 
+    pivot_wider(names_from = tech, 
+                values_from = c(logFC, FDR))
+  
+  # new colum names
+  logFC_comp1 <- grep(paste0("logFC_", comp1), colnames(log_FC_sub), value = T)
+  logFC_comp2 <- grep(paste0("logFC_", comp2), colnames(log_FC_sub), value = T)
+  FDR_comp1 <- grep(paste0("FDR_", comp1), colnames(log_FC_sub), value = T)
+  FDR_comp2 <- grep(paste0("FDR_", comp2), colnames(log_FC_sub), value = T)
+  
+  # Add sig threshold
+  log_FC_sub <- log_FC_sub |> 
+    mutate(sig = case_sig(FDR1 = !!sym(FDR_comp1), 
+                          FDR2 = !!sym(FDR_comp2), 
+                          com1 = comp1, 
+                          com2 = comp2, 
+                          FDR_t = FDR_t))
+  
+  # Add genes to highlight
+  log_FC_sub <- log_FC_sub |> mutate(
+    highlight = case_when(
+      sig %in% c("both") & 
+        sign(!!sym(logFC_comp1)) == sign(!!sym(logFC_comp2)) ~ gene,
+      .default = ""
+      )
+    ) 
+  
+  # colors
+  color_pal <- c("grey","#fdb462", "#ff6666","#0099cc")
+  names(color_pal) <- c("none", "both", comp1, comp2)
+  
+  # plot
+  p <- ggplot(log_FC_sub, aes_string(x=logFC_comp1, 
+                       y=logFC_comp2)) + 
+    geom_point(aes(colour = sig), size = 0.9, alpha = 0.7) +
+    geom_vline(xintercept = 0) +
+    geom_hline(yintercept = 0) + 
+    #xlim(0, 1) +
+    #ylim(0, 1) +
+    scale_color_manual(values = color_pal) + 
+    theme_bw()
+  
+  # annotations
+  #p + geom_text_repel(
+  #  aes(label = highlight),
+  #  family = "Poppins",
+  #  size = 2,
+  #  min.segment.length = 0, 
+  #  seed = 42, 
+  #  box.padding = 0.5,
+  #  max.overlaps = Inf,
+  #  arrow = arrow(length = unit(0.005, "npc")),
+  #  nudge_x = .15,
+  #  nudge_y = .5,
+  #  color = "#3D3D3D"
+  #)
+  p
+}
+
+
+```
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: plot scatter comp
+
+for (. in names(res_mod1)) {
+    vis <- res_mod1[[.]]
+    geo <- geo_mod1[[.]]
+    com_gen <- intersect(vis$gene, geo$gene)
+    logFC_tab <- dplyr::bind_rows(list("vis" = vis[vis$gene %in% com_gen,], 
+                                "geo" = geo[geo$gene %in% com_gen,]),
+                           .id = "tech") 
+    p <- logFC_plot(logFC_tab, "vis", "geo")
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: plot scatter mod2
+
+res_mod2 <- res_mod2[!names(res_mod2) %in% "par_inRCC_vs_LSCC"]
+
+for (. in names(res_mod2)) {
+    vis <- res_mod2[[.]]
+    geo <- geo_mod2[[.]]
+    colnames(geo) <- c("X","gene","logFC","FDR","F","sig","selected")
+    com_gen <- intersect(vis$gene, geo$gene)
+    #k <- keep[com_gen]
+    #com_gen <- com_gen[k]
+    logFC_tab <- dplyr::bind_rows(list("vis" = vis[vis$gene %in% com_gen,], 
+                                "geo" = geo[geo$gene %in% com_gen,]),
+                           .id = "tech") 
+    p <- logFC_plot(logFC_tab, "vis", "geo")
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+
+### Upset plots
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: upset mod1
+
+
+for (. in names(res_mod1)) {
+    vis <- res_mod1[[.]]
+    geo <- geo_mod1[[.]]
+    com_gen <- intersect(vis$gene, geo$gene)
+    
+   upset_list <- list("vis" = vis$gene[vis$gene %in% com_gen & vis$FDR < 0.1], 
+                      "geo" = geo$gene[geo$gene %in% com_gen & geo$FDR < 0.1])
+    p <- upset(fromList(upset_list), order.by = "freq")
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: upset mod2
+
+for (. in names(res_mod2)) {
+    vis <- res_mod2[[.]]
+    geo <- geo_mod2[[.]]
+    colnames(geo) <- c("X","gene","logFC","FDR","F","sig","selected")
+    com_gen <- intersect(vis$gene, geo$gene)
+    
+   upset_list <- list("vis" = vis$gene[vis$gene %in% com_gen & vis$FDR < 0.1], 
+                      "geo" = geo$gene[geo$gene %in% com_gen & geo$FDR < 0.1])
+    p <- upset(fromList(upset_list), order.by = "freq")
+    cat("####", ., "\n"); print(p); cat("\n\n")
+}
+
+```
+:::
+
+
+### Compare expression
+```{r}
+#| label: comp expr
+
+sce <- readRDS(file.path("..","outs", "01-sce.rds"))
+
+sce <- sce[,!sce$TissueSub %in% "LN"]
+sce$Origin <- sce$TissueSub |> forcats::fct_collapse(
+  "parenchymal" = c("Alveoles", "Kidney", "LSCC", "RCC"))
+sce$Origin <- sce$Origin |> droplevels()
+sce$Origin <- relevel(sce$Origin, ref="parenchymal")
+
+
+sce$anno5 <- paste0(sce$PatientID, "_", sce$Origin)
+pb_geo <- aggregateAcrossCells(sce, ids=sce$anno5, use.assay.type="logcounts",
+                               statistics = "mean")
+pb_geo$PatientID <- gsub("^r", "", pb_geo$PatientID)
+pb_geo$anno3 <- pb_geo$Origin
+levels(pb_geo$anno3) <- list(parenchymal  = "parenchymal", 
+                              ETLS = "E_TLS",
+                              MTLS = "SFL_TLS",
+                              EXCL = "PFL_TLS",
+                              EXCL = "Tcell_TLS")
+
+spe$PatientID <- gsub(".*_", "", spe$sample_id)
+spe$anno5 <- paste0(spe$PatientID, "_", spe$anno3)
+pb_vis <- aggregateAcrossCells(spe, ids=spe$anno5, use.assay.type="logcounts",
+                               statistics = "mean")
+#pb_vis <-pb_vis[keep,]
+
+overlap_gene <- intersect(rownames(pb_vis), rownames(pb_geo))
+overlap_pat <- intersect(pb_geo$PatientID, pb_vis$PatientID)
+```
+
+
+::: panel-tabset
+```{r}
+#| label: expr cor
+#| results: asis
+
+for (pat in overlap_pat) {
+    vis <- pb_vis[,pb_vis$PatientID %in% pat]
+    geo <- pb_geo[,pb_geo$PatientID %in% pat]
+    for (origin in c("ETLS", "MTLS", "parenchymal")){
+      vis_org <- vis[,vis$anno3 %in% origin]
+      geo_org <- geo[,geo$anno3 %in% origin]
+      if (ncol(vis_org) == 0 | ncol(geo_org) == 0){
+        p <- paste0("Sample not complete")
+        cat("####", paste0(pat, "_", origin), "\n"); print(p); cat("\n\n") 
+      }else{
+        com <- as.data.frame(cbind(logcounts(geo_org)[overlap_gene,],
+                   logcounts(vis_org)[overlap_gene,]))
+        com$gene <- rownames(com)
+        keep <- keep[rownames(com)]
+        com$keep <- keep
+        p <- ggplot(com, aes(x=V1, y=V2, color= keep)) +
+          geom_point(size=0.7, alpha= 0.4) +
+          geom_smooth(method="lm") +
+          xlab("logcounts GEOMX") +
+          ylab("logcounts Visium") +
+          theme_bw()
+        cat("####", paste0(pat, "_", origin), "\n"); print(p); cat("\n\n")
+      }
+    }
+}
+```
+:::
+
+
+### Compare expressed genes
+
+```{r}
+#| label: com gene
+#| code-fold: true
+
+geo_exclude <- read.csv("../outs/excluded_parenchymal_genes.csv")
+geo_TLS_RCC <- read.csv("../outs/TLS_RCC_genes.csv")
+geo_TLS_LSCC <- read.csv("../outs/TLS_LSCC_genes.csv")
+
+gene_geo <- rownames(sce)
+gene_vis <- rownames(spe)
+
+gene_types <- data.frame("gene" = unique(c(gene_geo, gene_vis)))
+gene_types <- gene_types |> mutate("gene_type" = case_when(
+          gene %in% exclude$gene | gene %in% geo_exclude$gene ~ "parenchymal",
+          gene %in% TLS_LSCC_gene & !gene %in% geo_exclude$gene | 
+            gene %in% geo_TLS_LSCC$x & !gene %in% exclude$gene ~ "TLS_LSCC",
+          gene %in% TLS_RCC_gene & !gene %in% geo_exclude$gene | 
+            gene %in% geo_TLS_RCC$x & !gene %in% exclude$gene ~ "TLS_RCC",
+          .default = NA
+        ))
+gene_types <- gene_types |> mutate("expr" = case_when(
+          gene %in% rownames(sce) & gene %in% rownames(spe) ~ "both",
+          gene %in% rownames(sce) & !gene %in% rownames(spe) ~ "geo",
+          !gene %in% rownames(sce) & gene %in% rownames(spe) ~ "vis",
+          .default = "None")
+        )
+
+techs <- levels(as.factor(gene_types$expr))
+gene_sum <- lapply(techs, function(type){
+  gene_list <- gene_types$gene[gene_types$expr %in% type]
+  gene_tab <- data.frame("gene" = gene_list, 
+                         "vis" = rep(NA, length(gene_list)),
+                         "geo" = rep(NA, length(gene_list)))
+  gene_tab$vis[gene_tab$gene %in% rownames(spe)] <- 
+    rowMeans(logcounts(spe)[gene_tab$gene[gene_tab$gene %in% rownames(spe)],]) 
+  gene_tab$geo[gene_tab$gene %in% rownames(sce)] <- 
+    rowMeans(logcounts(sce)[gene_tab$gene[gene_tab$gene %in% rownames(sce)],])
+  gene_tab
+})
+
+names(gene_sum) <- techs
+
+gene_types <- gene_types |> group_by(expr, gene_type) |> summarise(n=n())
+ggplot(gene_types, aes(fill=expr, y=n, x=gene_type)) + 
+              geom_bar(position="stack", stat="identity") +
+          theme_bw() +
+  scale_fill_brewer(na.value = "grey", palette = "Set2") 
+
+
+```
+
+
+#### Gene expression by tech
+
+::: panel-tabset
+```{r}
+#| results: asis
+#| label: genetype tab
+
+for (. in names(gene_sum)) {
+    tab <- gene_sum[[.]]
+    write.csv(tab, paste0("../outs/expressed_genes_by_tech_", ., ".csv"))
+    dt = datatable(tab)
+    cat("####", ., "\n"); print(htmltools::tagList(dt)); cat("\n\n")
+}
+
+```
+
+:::
+
+#### Patientwise
+
+::: panel-tabset
+```{r}
+#| label: expr threshold
+#| results: asis
+
+
+for (pat in overlap_pat) {
+    vis <- pb_vis[,pb_vis$PatientID %in% pat]
+    geo <- pb_geo[,pb_geo$PatientID %in% pat]
+    for (origin in c("ETLS", "MTLS", "parenchymal")){
+      vis_org <- vis[,vis$anno3 %in% origin]
+      geo_org <- geo[,geo$anno3 %in% origin]
+      if (ncol(vis_org) == 0 | ncol(geo_org) == 0){
+        p <- paste0("Sample not complete")
+        cat("####", paste0(pat, "_", origin), "\n"); print(p); cat("\n\n") 
+      }else{
+        all_genes <- unique(c(rownames(vis_org), rownames(geo_org)))
+        expr_all <- data.frame("gene" = all_genes)
+        expr_all <- expr_all |> mutate("vis" = case_when(
+          gene %in% rownames(vis_org) ~ TRUE,
+          .default = FALSE)
+        )
+        expr_all <- expr_all |> mutate("geo" = case_when(
+          gene %in% rownames(geo_org) ~ TRUE,
+          .default = FALSE)
+        )
+        expr_all <- expr_all |> mutate("gene_type" = case_when(
+          gene %in% exclude$gene | gene %in% geo_exclude$gene ~ "parenchymal",
+          gene %in% TLS_LSCC_gene & !gene %in% geo_exclude$gene | 
+            gene %in% geo_TLS_LSCC$x & !gene %in% exclude$gene ~ "TLS_LSCC",
+          gene %in% TLS_RCC_gene & !gene %in% geo_exclude$gene | 
+            gene %in% geo_TLS_RCC$x & !gene %in% exclude$gene ~ "TLS_RCC",
+          .default = NA
+        ))
+        expr_all <- expr_all |> mutate("expr" = case_when(
+          geo & vis ~ "both",
+          geo & !vis ~ "geo",
+          !geo & vis ~ "vis",
+          .default = "low")
+        )
+        expr_sum <- expr_all |> group_by(expr, gene_type) |> summarise(n=n())
+        p1 <- ggplot(expr_sum, aes(fill=gene_type, y=n, x=expr)) + 
+              geom_bar(position="stack", stat="identity") +
+          theme_bw()
+        expr_type <- expr_sum |> filter(!is.na(gene_type))
+        p2 <- ggplot(expr_type, aes(fill=expr, y=n, x=gene_type)) + 
+              geom_bar(position="stack", stat="identity") +
+          theme_bw() 
+        p <- p1 + p2 + plot_layout(nrow=1) &
+          scale_fill_brewer(na.value = "grey", palette = "Set2") 
+        cat("####", paste0(pat, "_", origin), "\n"); print(p); cat("\n\n")
+      }
+    }
+}
+```
+:::

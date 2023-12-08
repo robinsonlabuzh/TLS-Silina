@@ -61,7 +61,7 @@ lys <- lapply(idx, \(.) sub[, .])
 names(ids) <- ids <- c("anno1", "anno2")
 pbs <- lapply(ids, \(.) {
   y <- aggregateAcrossCells(sub, colData(sub)[c("sample_id", .)])
-  z <- calcNormFactors(DGEList(assay(y), remove.zeros = TRUE))
+  z <- calcNormFactors(DGEList(assay(y), remove.zeros = FALSE))
   assay(y, "normcounts", FALSE) <- cpm.DGEList(z, log = FALSE)
   assay(y, "logcounts" , FALSE) <- cpm.DGEList(z, log = TRUE )
   mds <- plotMDS.DGEList(z, plot = FALSE)
@@ -229,7 +229,7 @@ pal <- c(pal, list(label = tmp))
 ### Pseuodbulk-MDS
 
 ```{r}
-#| label: pbs
+#| label: pbs-mds
 ids <- colData(spe)[c("sample_id", "anno1")]
 hvg <- rowAnys(sapply(lys, \(.) rowData(.)$hvg))
 pbs <- aggregateAcrossCells(spe, ids, subset_row = hvg)
@@ -255,11 +255,14 @@ lapply(
 ```{r}
 #| label: plot-umap
 #| dependson: cd
-ggplot(cd, aes(UMAP1, UMAP2, col = sample_id)) +
-    facet_grid(~ TumorType, scales = "free") +
+lapply(names(cd),\(.)
+  ggplot(cd[[.]], aes(UMAP1, UMAP2, col = sample_id)) +
+    #facet_grid(~ TumorType, scales = "free") +
     geom_point(size = 0.5, alpha = 0.5) +
     scale_color_brewer(palette = "Set2") +
-    theme_void() + theme(aspect.ratio = 1)
+    ggtitle(.) +
+    theme_void() + theme(aspect.ratio = 1)) |> 
+  wrap_plots(nrow = 1)
 ```
 
 # Markers

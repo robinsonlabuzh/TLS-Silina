@@ -240,7 +240,7 @@ cbind(
 
 ```{r}
 #| label: save-data
-saveRDS(spe, "../outs/01-spe.rds")
+saveRDS(sub, "../outs/01-spe.rds")
 ```
 
 ::: {.callout-note icon=false, collapse=true}
